@@ -56,9 +56,16 @@ app.use('/api', require('./routes/adminRoutes')(ctx));
 const mask = require('./routes/maskRoutes')();
 app.use('/api', mask.router);
 app.use('/api', require('./routes/chatRoutes')(ctx));
+app.use('/api', require('./routes/fileRoutes')(ctx).router);
+app.use('/api', require('./routes/agentRoutes')().router);
+const pub = require('./routes/pubRoutes');
+app.use('/api', pub.router); // /pub 前缀在 EXEMPT 免登录名单里
 
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'mask', uptime: Math.round(process.uptime()) }));
 app.get('/api/system-info', (req, res) => res.json({ name: '面具', version: pkg.version, beian: getSetting('beian', '') }));
+
+// ---- 分享页（/s/:token 免登录，token 即凭证；必须在 SPA 兜底之前）----
+app.get('/s/:token', pub.sharePage);
 
 // 404 for unknown API
 app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));

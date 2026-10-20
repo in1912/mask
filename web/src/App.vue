@@ -10,6 +10,8 @@ const theme = ref('dark');
 
 const NAV = [
   { path: '/', icon: 'forum', label: '数据脱敏' },
+  { path: '/files', icon: 'description', label: '文件脱敏' },
+  { path: '/agents', icon: 'smart_toy', label: 'Agent协同' },
   { path: '/rules', icon: 'tune', label: '规则配置' },
   { path: '/history', icon: 'history', label: '脱敏历史' },
   { path: '/about', icon: 'science', label: '脱敏原理' },

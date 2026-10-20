@@ -6,3 +6,6 @@ web/dist/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# PRD 不入库（用户要求，仅本地留存）
+面具AI脱敏系统_PRD_V1.0.md

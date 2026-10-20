@@ -91,6 +91,21 @@ body.nav-collapsed .nav-item .lbl { display: none; }
 .btn.danger:hover { background: rgba(229,72,77,.1); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn.sm { padding: 4px 10px; font-size: 13px; }
+.mini {
+  display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; font-size: 12px;
+  border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); white-space: nowrap;
+}
+.mini:hover { background: var(--hover); }
+.mini:disabled { opacity: .45; cursor: not-allowed; }
+.mini.danger { color: var(--danger); border-color: var(--danger); }
+.mini .material-icons { font-size: 15px; }
+a.mini { color: var(--accent); text-decoration: none; }
+.md-view { line-height: 1.7; font-size: 13.5px; }
+.md-view h2, .md-view h3, .md-view h4 { margin: 12px 0 6px; }
+.md-view pre { background: var(--hover); padding: 10px; border-radius: 8px; overflow: auto; font-size: 12.5px; }
+.md-view code { background: var(--accent-weak); color: var(--accent); padding: 0 4px; border-radius: 4px; font-size: 12px; }
+.md-view ul { padding-left: 22px; }
+.md-view p { margin: 6px 0; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 12px; background: var(--accent-weak); color: var(--accent); }
 .tag.ok { background: rgba(52,201,142,.14); color: var(--ok); }
