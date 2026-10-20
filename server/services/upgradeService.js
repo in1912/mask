@@ -104,6 +104,32 @@ function classify(name) {
   };
 }
 
+// require 扫描前先剥注释：注释里写的模块名曾被当成真引用（v0.4.2 实测，zipService 头注释
+// 里一句「绝不引入同目录 db 模块」就触发了假警告）。只保留代码字符，字符串原样留下。
+// 注意：本文件也会被打进升级包，被旧版（未剥注释的）扫描器扫描——所以这里的注释也不要
+// 出现完整的 require 调用字面量，否则旧版升级到本版时仍会报同一条假警告。
+function stripComments(code) {
+  let out = '', i = 0, quote = '';
+  const n = code.length;
+  while (i < n) {
+    const c = code[i], d = code[i + 1];
+    if (quote) {
+      if (c === '\\') { out += c + (d || ''); i += 2; continue; }
+      if (c === quote) quote = '';
+      out += c; i++; continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { quote = c; out += c; i++; continue; }
+    if (c === '/' && d === '/') { while (i < n && code[i] !== '\n') i++; continue; }
+    if (c === '/' && d === '*') {
+      i += 2;
+      while (i < n && !(code[i] === '*' && code[i + 1] === '/')) i++;
+      i += 2; out += ' '; continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
 // ---------- 预检 ----------
 let busy = false;      // 单飞：同一时刻只允许一个预检/应用在跑
 let pendingPlan = null; // {token, buf, plan, at} —— 全局只留一份（apply 不二次上传，也杜绝「预检 A 包、应用 B 包」）
@@ -232,7 +258,7 @@ function doPlan(buf) {
   const inPack = new Set(items.map((i) => i.name));
   const missing = new Set();
   for (const it of serverItems) {
-    const code = it.data.toString('utf8');
+    const code = stripComments(it.data.toString('utf8'));
     const re = /require\(\s*['"]([^'"]+)['"]\s*\)/g;
     let m;
     while ((m = re.exec(code))) {
