@@ -158,6 +158,10 @@ async function badPack(name, zip, wantCode) {
     const zip = buildPack({ version: ver, dist: '20260202000000', extraEntries: [{ name: 'data/mask.sqlite', data: 'x' }] });
     await badPack('data/ 目录点名拒绝', zip, 'FORBIDDEN_PATH');
   }
+  await badPack('误传三端分发包（带 面具-x-docker/ 外壳）', buildZip([
+    { name: '面具-9.9.9-docker/server/index.js', data: Buffer.from('x') },
+    { name: '面具-9.9.9-docker/部署说明.txt', data: Buffer.from('x') },
+  ]), 'DIST_PACKAGE');
   await badPack('路径穿越 ..', (() => {
     const e = [{ name: 'server/evil.js', data: Buffer.from('module.exports=1') }, { name: 'a/../../evil.js', data: Buffer.from('x') }];
     return buildZip(e);

@@ -166,6 +166,19 @@ function doPlan(buf) {
   try { entries = extractZip(buf); } catch (e) { throw new UpgradeError(400, 'BAD_ZIP', e.message); }
   if (!entries.length) throw new UpgradeError(400, 'EMPTY_PACK', '升级包里没有任何文件');
 
+  // 三端分发包（windows/macos/docker）外面套着一个 `面具-<版本>-<平台>/` 目录，
+  // 上传到这里会被逐条判成「非 ASCII / 非白名单」，148 条报错看得人一头雾水。
+  // 先认出它，直接说人话（生产两次误传实测）。
+  const topDirs = new Set(entries.map((e) => e.name.split('/')[0]));
+  if (topDirs.size === 1) {
+    const top = [...topDirs][0];
+    if (/-(windows|macos|docker)$/.test(top)) {
+      throw new UpgradeError(400, 'DIST_PACKAGE',
+        `你上传的是三端分发包「${top}.zip」，不是在线升级包——分发包是给人解压部署的整包，`
+        + '升级请用同一版本目录里的「面具-<版本>-upgrade.zip」（约 500KB，条目 30~40 个）。');
+    }
+  }
+
   // ---- 1) 逐条路径校验 + 分类（先把所有坏条目收齐再报，比只报第一条好用） ----
   const bad = [];
   const items = [];
