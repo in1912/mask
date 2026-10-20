@@ -36,7 +36,7 @@ async function submit() {
       <div class="login-logo"><span class="material-icons" style="font-size:40px;color:var(--accent)">theater_comedy</span></div>
       <h1>面具</h1>
       <p class="mut" style="text-align:center;margin-bottom:22px">AI 脱敏系统 · 先脱敏，再上云</p>
-      <input v-model="username" placeholder="账号" autocomplete="username" @keyup.enter="$refs.pw.focus()" />
+      <input v-model="username" placeholder="账号" autocomplete="username" style="width:100%" @keyup.enter="$refs.pw.focus()" />
       <div style="position:relative;margin-top:12px">
         <input ref="pw" v-model="password" :type="showPw ? 'text' : 'password'" placeholder="密码"
           autocomplete="current-password" style="width:100%;padding-right:40px" @keyup.enter="submit" />
