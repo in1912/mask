@@ -169,7 +169,14 @@ async function badPack(name, zip, wantCode) {
     return buildZip(inner);
   })(), 'BAD_MANIFEST');
   await badPack('manifest 缺失', buildPack({ version: ver, dist: '20260202000000', noManifest: true }), 'BAD_MANIFEST');
-  await badPack('dist 时间戳不比现役新', buildPack({ version: ver, dist: DIST0 }), 'STALE_DIST');
+  await badPack('dist 时间戳比现役旧', buildPack({ version: ver, dist: '20251231000000' }), 'STALE_DIST');
+  {
+    // 纯服务端升级不改前端：包内 dist 与现役同名必须放行（v0.4.3 生产事故）
+    const eq = await req('POST', '/api/upgrade/plan', { token: tk, raw: buildPack({ version: ver, dist: DIST0 }) });
+    ok('dist 与现役相同允许（纯服务端升级）',
+      eq.status === 200 && eq.json.plan && eq.json.plan.summary.dist_dir === DIST0,
+      `实际 ${eq.status}/${eq.json.code} ${eq.json.error || ''}`);
+  }
   await badPack('dist 缺 index.html', buildPack({ version: ver, dist: '20260202000001', omitIndex: true }), 'INCOMPLETE_DIST');
   await badPack('sha256 与清单不符', (() => {
     const inner = extractZip(buildPack({ version: ver, dist: '20260202000002', noManifest: true }));

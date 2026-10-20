@@ -192,10 +192,12 @@ function doPlan(buf) {
   const distName = distSet.size ? [...distSet][0] : '';
   const latestOnDisk = latestDistName();
   if (distName) {
-    if (latestOnDisk && distName <= latestOnDisk) {
-      // latestDist() 取字典序最大的目录，时间戳不比现役新的话新前端永远不会被选中 = 白升
+    if (latestOnDisk && distName < latestOnDisk) {
+      // latestDist() 取字典序最大的目录：比现役旧的前端永远不会被选中 = 白升。
+      // 相等是允许的——纯服务端升级前端没重构建，包内 dist 与现役同名，落盘时按内容逐条跳过，
+      // 不影响新服务端代码生效；要求严格更新会把「只改后端」的包全部挡在门外（v0.4.3 实测）。
       throw new UpgradeError(400, 'STALE_DIST',
-        `包里的前端目录 ${distName} 不比现役的 ${latestOnDisk} 新，装上去也不会生效（前端目录名必须比现役大）`);
+        `包里的前端目录 ${distName} 比现役的 ${latestOnDisk} 旧，装上去也不会生效（前端目录名不能比现役小）`);
     }
     if (!items.some((i) => i.name === `web/dist/${distName}/index.html`)) {
       throw new UpgradeError(400, 'INCOMPLETE_DIST', `包里的前端目录 ${distName} 没有 index.html，是个残缺的 dist`);

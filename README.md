@@ -123,7 +123,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 平台边界（如实说）：Windows x64 与 Linux x64/arm64 会自动下载并构建命令行引擎；macOS 目前只装 Python 引擎。Linux 构建已按 Docker 的目录布局在本机等价复跑（godlp 静态 ELF、sensitive-word jar）。
 
-**v0.4.3 修了两个只在生产真装时才暴露的问题**：①解出的 JDK/Go/Maven 被搬到项目根（`/app/jdk`）而不是 `vendor/` 下，装完永远探测不到——这是 v0.3.2 起就存在、本机因 `vendor/` 早已存在而从未走到的分支；②Docker 里把 `vendor/` 挂成宿主机卷时，从镜像层 `rename` 到挂载卷会 `EXDEV: cross-device link`，现在自动退回复制，挂载点本身删不掉时改为清空内容。另外下载请求补了 User-Agent（Adoptium 对无 UA 请求回 403），Linux JDK 多一个清华镜像兜底。**开发机仍没有 Docker，修复后没有在真容器里把整个按钮流程重跑一遍**——生产那次的实测证据只到「JDK 下载成功、搬移报 EXDEV」。
+**v0.4.3 修了两个只在生产真装时才暴露的问题**：①解出的 JDK/Go/Maven 被搬到项目根（`/app/jdk`）而不是 `vendor/` 下，装完永远探测不到——这是 v0.3.2 起就存在、本机因 `vendor/` 早已存在而从未走到的分支；②Docker 里把 `vendor/` 挂成宿主机卷时，从镜像层 `rename` 到挂载卷会 `EXDEV: cross-device link`，现在自动退回复制，挂载点本身删不掉时改为清空内容。另外，预检原先要求包内前端目录**严格比现役新**，纯服务端升级（前端没重构建、dist 同名）会被误判为「白升」拒收；v0.4.3 改为**允许相等、只拒绝更旧**，落盘时同名文件按内容跳过。下载请求补了 User-Agent（Adoptium 对无 UA 请求回 403），Linux JDK 多一个清华镜像兜底。**开发机仍没有 Docker，修复后没有在真容器里把整个按钮流程重跑一遍**——生产那次的实测证据只到「JDK 下载成功、搬移报 EXDEV」。
 
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
@@ -169,7 +169,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 61 + ssl 16 + engines 45 + setup 21 = 376 项
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 62 + ssl 16 + engines 45 + setup 21 = 377 项
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 
