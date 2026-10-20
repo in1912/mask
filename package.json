@@ -1,0 +1,19 @@
+{
+  "name": "mask",
+  "version": "0.1.0",
+  "private": true,
+  "description": "面具 · AI 脱敏系统",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "build:web": "cd web && npm install && npm run build",
+    "check:engine": "node scripts/check-engine.mjs",
+    "check:server": "node scripts/check-server.mjs",
+    "check:chat": "node scripts/check-chat.mjs",
+    "check": "node scripts/check-engine.mjs && node scripts/check-server.mjs && node scripts/check-chat.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.2.0"
+  }
+}
