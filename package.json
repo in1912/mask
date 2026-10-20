@@ -19,7 +19,8 @@
     "check:upgrade": "node scripts/check-upgrade.mjs",
     "check:ssl": "node scripts/check-ssl.mjs",
     "check:engines": "node scripts/check-engines.mjs",
-    "check:batch": "node scripts/check-batch.mjs"
+    "check:batch": "node scripts/check-batch.mjs",
+    "pack:dist": "node scripts/build-dist-packages.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

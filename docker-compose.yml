@@ -1,0 +1,21 @@
+services:
+  mask:
+    build: .
+    container_name: mask
+    restart: unless-stopped
+    ports:
+      - '9909:9909'
+    environment:
+      # 首个管理员（只在空库时创建），部署后请立刻改密码
+      MASK_ADMIN: aiadmin
+      MASK_ADMIN_PASSWORD: admin123
+      # 登录地区在线查询（ip-api.com）；内网或不想联网时关闭
+      # MASK_GEO: 'off'
+      # 外部引擎（Presidio/GLiNER/OPF…）默认不装配：数 GB、需联网。
+      # 想用：改成 '0' 并执行 docker compose exec mask node scripts/engines-setup.mjs
+      MASK_NO_SETUP: '1'
+    volumes:
+      - ./data:/app/data
+      # 装了外部引擎后再放开这两行，容器重建不必重装（宿主机目录会变几个 GB）
+      # - ./python/vendor:/app/python/vendor
+      # - ./python/models:/app/python/models

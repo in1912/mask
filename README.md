@@ -32,6 +32,24 @@ cd web && npm run dev
 
 首次启动空库自动创建管理员 `aiadmin / admin123`（仅空库首启生效，请立刻改密）。**登录后先去「系统设置 → AI 配置」填外部 AI 的接口地址、模型与 API Key（可先点「测试连接」），否则对话会返回 503「AI 接口未配置」。**
 
+## 三端分发包
+
+```bash
+npm run pack:dist      # 产物在仓库根目录（*.zip 已在 .gitignore，不入库）
+```
+
+| 包 | 内容 | 启动 |
+|---|---|---|
+| `面具-<版本>-windows.zip` | server / web 构建 / 生产 node_modules / Python 边车源码 / 引擎源码骨架 | 解压后双击 `start.bat` |
+| `面具-<版本>-macos.zip` | 同上（macOS 版启动器） | `chmod +x start.command` 后双击 |
+| `面具-<版本>-docker.zip` | server / web 构建 / Dockerfile / docker-compose.yml | `docker compose up -d --build` |
+
+三个包都**不含任何个人数据**：`data/` 是空目录，首次启动自动建库（默认管理员 `aiadmin / admin123`，登录后请立刻改）。`Logs/`、`web/src/`、旧的前端构建、`python/vendor`、`python/models`、JDK/Go/Maven 运行时都不进包。
+
+**外部引擎**：内置规则引擎开箱即用。Windows 包首次启动会装配 Python 引擎并自动下载 JDK/Go/Maven 构建 godlp、sensitive-word；macOS 包只装配 Python 引擎（godlp/sensitive-word 的自动构建目前只按 Windows 编写）；Docker 默认 `MASK_NO_SETUP=1` 不装配，需要时执行 `docker compose exec mask node scripts/engines-setup.mjs` 并持久化 `python/vendor`、`python/models`。装配需要联网、体积数 GB，失败不拦主服务，设置 → 引擎里如实报哪个不可用。
+
+**验证边界**：Windows 包已解压实测（health / 版本 0.4.0 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通；开发机没有 Docker，**镜像本身未实际构建**。
+
 ## 功能（v0.4.0）
 
 | 菜单 | 说明 |
