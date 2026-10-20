@@ -34,7 +34,7 @@ async function req(method, p, { token, body } = {}) {
 }
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'mask-eng-'));
-const srv = spawn('node', ['server/index.js'], { cwd: ROOT, env: { ...process.env, MASK_DATA_DIR: dataDir, PORT: String(PORT), MASK_GEO: 'off' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const srv = spawn('node', ['server/index.js'], { cwd: ROOT, env: { ...process.env, MASK_NO_SIDECAR: '1', MASK_DATA_DIR: dataDir, PORT: String(PORT), MASK_GEO: 'off' }, stdio: ['ignore', 'pipe', 'pipe'] });
 const sidecar = spawn('python', [path.join(ROOT, 'python/sidecar.py'), '--port', String(SIDECAR_PORT)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
 let sidecarLog = '', srvLog = '';
 sidecar.stderr.on('data', (d) => { sidecarLog += d; });
@@ -78,7 +78,10 @@ try {
     ok('B1 匿名 401', anon.status === 401, anon.status);
     const lst = await req('GET', '/api/engines', { token: tk });
     const ids = lst.json.engines.map((e) => e.id);
-    ok('B2 六引擎注册（含隐藏自检）', ['builtin', 'godlp', 'sensitive_word', 'presidio', 'gliner', 'argus', 'selftest'].every((x) => ids.includes(x)), ids);
+    ok('B2 文本引擎全部注册（含隐藏自检）', ['builtin', 'godlp', 'sensitive_word', 'presidio', 'gliner', 'argus', 'scrubadub', 'opf', 'selftest'].every((x) => ids.includes(x)), ids);
+    ok('B2b D:\\脱敏 的工具类引擎也在册且标 applicable:false',
+      ['cloakdb', 'shardingsphere', 'postgresql_anonymizer', 'pg_anonymize', 'ranger', 'arx', 'sdcMicro', 'jailer', 'anonimatron']
+        .every((x) => lst.json.engines.some((e) => e.id === x && e.applicable === false)), ids.filter((x) => !ids.includes(x)));
     ok('B3 selftest 标记 hidden（UI 不显示）', lst.json.engines.find((e) => e.id === 'selftest').hidden === true);
     ok('B4 默认配置 主引擎=内置', lst.json.config.mode === 'primary' && lst.json.config.primary === 'builtin', lst.json.config);
     const bad = await putConfig(tk, { mode: 'primary', primary: 'nope-engine' });
@@ -87,6 +90,10 @@ try {
     ok('B6 命令带换行被拒', bad2.status === 400, bad2);
     const good = await putConfig(tk, { mode: 'primary', primary: 'builtin', enabled: { builtin: true } });
     ok('B7 合法配置 200', good.status === 200 && good.json.config.primary === 'builtin', good.json);
+    const toolProbe = await req('POST', '/api/engines/probe', { token: tk, body: { id: 'cloakdb' } });
+    ok('B8 数据库工具探测被拒且说明原因', toolProbe.json.ok === false && /不参与.*文本识别/.test(toolProbe.json.error || ''), toolProbe.json);
+    const toolPrimary = await putConfig(tk, { mode: 'primary', primary: 'cloakdb' });
+    ok('B9 数据库工具不能当主引擎 → 400', toolPrimary.status === 400, toolPrimary);
   }
 
   console.log('C. 探测（真调用）');
@@ -98,7 +105,14 @@ try {
     const p3 = await req('POST', '/api/engines/probe', { token: tk, body: { id: 'nope' } });
     ok('C3 未知引擎拒', p3.json.ok === false, p3.json);
     const p4 = await req('POST', '/api/engines/probe', { token: tk, body: { id: 'godlp' } });
-    ok('C4 godlp 未配命令时探测失败（命令不存在）', p4.json.ok === false, p4.json);
+    ok('C4 godlp 用项目内默认命令探测（装好即可用，没装如实报）',
+      p4.json.ok === true || /找不到|未安装|安装|退出码/.test(p4.json.error || ''), p4.json);
+    // 边车其余引擎：装了就可用，没装必须回可读的「未安装/导入失败」，绝不静默 ok
+    for (const id of ['presidio', 'gliner', 'argus', 'scrubadub', 'opf']) {
+      const p = await req('POST', '/api/engines/probe', { token: tk, body: { id } });
+      ok(`C5 ${id} 探测结果如实（可用或说明未装/导入失败）`,
+        p.json.ok === true || /未安装|导入失败|安装/.test(p.json.error || ''), p.json);
+    }
   }
 
   console.log('D. stdio 适配器（mock 包装走真链路）');
@@ -152,12 +166,12 @@ try {
     ok('G1 匿名 401', anon.status === 401, anon.status);
     const ack = await req('GET', '/api/engines/ack', { token: tk });
     const names = ack.json.items.map((x) => x.name);
-    ok('G2 五个外部引擎全部在列（不管装没装）', ['godlp', 'sensitive-word', 'Presidio', 'GLiNER-PII', 'argus-redact'].every((n) => names.includes(n)), names);
+    ok('G2 七个文本引擎全部在列（不管装没装）', ['godlp', 'sensitive-word', 'Presidio', 'GLiNER-PII', 'argus-redact', 'scrubadub', 'OpenAI Privacy Filter'].every((n) => names.includes(n)), names);
     ok('G3 隐藏自检引擎不进致谢', !names.some((n) => n.includes('自检')), names);
     const g = ack.json.items.find((x) => x.name === 'godlp');
     ok('G4 探测成功的带 ok 状态', g.probe && g.probe.ok === true, g.probe);
-    const p = ack.json.items.find((x) => x.name === 'Presidio');
-    ok('G5 没探测过的 probe=null（未探测）', p.probe === null, p);
+    const p = ack.json.items.find((x) => x.name === 'CloakDB');
+    ok('G5 数据库工具不参与探测（probe=null）', p && p.applicable === false && p.probe === null, p);
     ok('G6 致谢带仓库/许可/厂商', g.home.includes('gitee.com/bytedance/godlp') && !!g.vendor && !!g.license, g);
   }
   console.log('H. 报障回归：命令不存在给人话、边车填错说清楚');

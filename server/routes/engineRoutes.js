@@ -61,8 +61,12 @@ router.put('/config', (req, res) => {
   for (const [id, v] of Object.entries(b.enabled || {})) {
     if (typeof v === 'boolean') enabled[id] = v;
   }
-  if (b.mode === 'primary' && b.primary && !engines.ENGINES.some((e) => e.id === b.primary)) {
+  const primaryEng = b.mode === 'primary' && b.primary ? engines.ENGINES.find((e) => e.id === b.primary) : null;
+  if (b.mode === 'primary' && b.primary && !primaryEng) {
     return res.status(400).json({ error: '主引擎不存在', primary: b.primary });
+  }
+  if (primaryEng && primaryEng.applicable === false) {
+    return res.status(400).json({ error: `${primaryEng.name} 是数据库/统计类脱敏工具，不能当文本主引擎` });
   }
   const saved = engines.saveCfg({ mode: b.mode, primary: b.primary, enabled, commands: b.commands, sidecar_url: b.sidecar_url });
   console.log(`[engines] 管理员 ${req.user.username} 更新引擎配置（mode=${saved.mode}, primary=${saved.primary}）`);

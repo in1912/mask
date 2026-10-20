@@ -11,6 +11,8 @@ const { db, DATA_DIR, getSetting } = require('./db');
 const secret = require('./secret');
 const loginlog = require('./loginlog');
 const restartService = require('./services/restartService');
+const engines = require('./engines');
+const { ensureSidecar } = require('./sidecarLauncher');
 const pkg = require('../package.json');
 
 const aesKey = secret.loadSecretKey(DATA_DIR);
@@ -198,6 +200,11 @@ async function boot() {
         + `如果行为异常，把 ${pending.backup_dir || 'data/upgrades/backup_*'} 里的文件拷回安装目录再启动`);
     }
     restartService.clearPending();
+
+    // 外部引擎边车：本机地址且没在跑就自动拉起（MASK_NO_SIDECAR=1 时跳过）。
+    // 不 await：拉不起来也只是外部引擎不可用，主服务照常。
+    ensureSidecar(() => engines.getCfg().sidecar_url)
+      .catch((e) => console.warn('[sidecar] 自动拉起异常：', e.message));
 
     if (info && info.tls) {
       console.log(`[mask] 面具 AI 脱敏系统 v${pkg.version} 已启动：HTTP/HTTPS 同端口自适应 :${PORT}（证书 ${SSL_CERT}）`);

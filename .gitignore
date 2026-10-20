@@ -9,3 +9,26 @@ web/dist/
 
 # PRD 不入库（用户要求，仅本地留存）
 面具AI脱敏系统_PRD_V1.0.md
+
+# 项目内引擎运行时/模型/构建产物（scripts/engines-setup.mjs 首次启动生成，体积数 GB，不入库）
+python/vendor/
+python/models/
+vendor/jdk/
+vendor/go/
+vendor/maven/
+vendor/maven-repo/
+vendor/dl/
+vendor/sensitive-word/
+vendor/godlp/godlp-cli.exe
+vendor/.engines-ready.json
+
+# D:\脱敏 其他工具源码体积大，不入库；只保留面具真正要构建的两份源码
+vendor/engines-src/*
+!vendor/engines-src/godlp/
+!vendor/engines-src/privacy-filter/
+
+# Python / Java 构建缓存
+__pycache__/
+*.pyc
+vendor/sensitive-word-workspace/target/
+vendor/sensitive-word-workspace/dependency-reduced-pom.xml

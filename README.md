@@ -56,21 +56,27 @@ cd web && npm run dev
 - **称谓**：`王总/周工/Li工` 类姓氏+称谓（带防误报词典：`上周工作/关于工资/张总共` 不咬）
 - **引号**：中文引号包裹的 2~4 字姓名
 
-### 多引擎切换（v0.3.0）
+### 多引擎切换（v0.3.2：引擎与依赖随项目走）
 
 内置规则引擎之外可接入外部本地引擎，设置 → 引擎 里配置**主引擎（单选，内置让位）**或**并行使用（并集去重）**。所有引擎都在本机跑，原文不出网；全部外部引擎都进「致谢」页（引用即致谢），探测状态只作附加信息。
 
+**首次启动自动装配**：`npm start` / `启动.cmd` 会先跑 `scripts/engines-setup.mjs`——把 Python 依赖装进 `python/vendor/`、模型预取到 `python/models/`、JDK/Go/Maven 解压到 `vendor/`、编译 godlp CLI 与 sensitive-word jar。检查是幂等的：装好后每次启动只做存在性检查，秒过且完全离线。装配失败不拦主服务，缺哪个引擎就在探测页如实报哪个。
+
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
-| godlp（字节跳动） | 命令行 | Go 脱敏 SDK，需自行编译 CLI；约定 stdin 进文本、stdout 出 `{"entities":[…]}` JSON（`scripts/engine-mock-stdio.mjs` 是包装示例） |
-| sensitive-word（houbb） | 命令行 | Java 中文敏感词库，需 JDK + 薄包装，命令在设置页填 |
-| Presidio（微软） | Python 边车 | `pip install presidio-analyzer presidio-anonymizer spacy`，由 `python/sidecar.py` 承载 |
-| GLiNER-PII（knowledgator） | Python 边车 | 零样本 PII 抽取模型，`pip install gliner`；首次调用下载数百 MB 模型（模型/阈值可用 `MASK_GLINER_MODEL`/`MASK_GLINER_THRESHOLD` 环境变量改） |
-| argus-redact | Python 边车 | `pip install argus-redact`；其公开 API 没有稳定性承诺，边车里做了入口自适配，不适配就如实报错 |
+| godlp（字节跳动） | 命令行 | Go 脱敏 SDK；项目内 `vendor/godlp-cli` 是 stdin→实体 JSON 的包装，首次启动自动编译 |
+| sensitive-word（houbb） | 命令行 | Java 中文敏感词库；项目自带 JDK 21 与 CLI 包装，首次启动自动构建 jar |
+| Presidio（微软） | Python 边车 | 依赖装在项目内 `python/vendor`；NoOp NLP + 中文手机号/身份证/银行卡自定义识别器，不下载 spaCy 模型 |
+| GLiNER-PII（knowledgator） | Python 边车 | `urchade/gliner_multi_pii-v1`（约 1.1GB）已预取；中文按字符切词，纯本地推理 |
+| argus-redact | Python 边车 | fast 档（本地正则+词表，不联网），实体坐标来自 `RedactReport.entities` |
+| scrubadub | Python 边车 | 邮箱/URL/信用卡等规则识别；中文紧贴英文时依赖标点边界，可能漏报 |
+| OpenAI Privacy Filter | Python 边车 | 1.5B MoE token 分类模型，CPU 本地推理，模型约 2.8GB；首次加载较慢 |
+
+表格之外，`D:\脱敏` 里的 9 个数据库/大数据/统计类工具（CloakDB、ShardingSphere、postgresql_anonymizer、pg_anonymize、Ranger、ARX、sdcMicro、Jailer、anonimatron）也在设置页列出，标注**「不参与文本识别」**——它们靠连库或整表处理工作，不产出文本实体坐标，因此不能当主引擎，也不会被探测。
 
 外部引擎实体类型自动映射到内置规则（PERSON→person…），映射不到的用 `EXT` 码；坐标对不上按实体内容重定位（Python 码点 vs JS UTF-16 单元天然有偏差）。引擎失败**如实报 502**，绝不静默降级假装脱敏成功。
 
-**边车地址**默认 `http://127.0.0.1:9812`，边车是独立的 Python 进程（`python python/sidecar.py`）。**不要填本系统自己的 9909**——那会把本系统的网页当成边车，探测只会报「响应异常（HTTP 200）」；保存时会被直接拦下，历史遗留的 9909 配置读取时自动回落 9812。
+**边车地址**默认 `http://127.0.0.1:9812`。主服务启动时发现本机地址上没有边车，会自己拉起 `python/sidecar.py`（`MASK_NO_SIDECAR=1` 可关闭）。**不要填本系统自己的 9909**——那会把本系统的网页当成边车，探测只会报「响应异常（HTTP 200）」；保存时会被直接拦下，历史遗留的 9909 配置读取时自动回落 9812。
 
 **命令行引擎报错**：先按 `PATH`/`PATHEXT` 自己找程序，找不到直接给中文提示（例：`找不到可执行程序「java」…需要先装 JDK/JRE 8+`），不再把 cmd.exe 的 GBK 原始报错甩给用户；Windows 下子进程先 `chcp 65001`，仍有乱码按 GBK 兜底解码。
 
@@ -86,7 +92,7 @@ cd web && npm run dev
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + upgrade 61 + ssl 16 + engines 37 = 292 项
+# engine 54 + server 39 + chat 26 + files 59 + upgrade 61 + ssl 16 + engines 45 = 300 项
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 
@@ -99,7 +105,9 @@ node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在
 - 附件支持 txt/docx/pdf/xlsx；老格式 .doc/.xls 如实拒收并提示另存；**图片明确拒收**（内容本身送出去就是明文）；扫描件 PDF 提取不到文字时如实报错
 - PDF 提取依赖内嵌字体 ToUnicode 映射，无映射的内嵌字体不受支持
 - 文档级对照表与文档同库同机，删除文档即连带删除对照与回文；分享页只有码文、绝无原文
-- 外部引擎是「装了才可用」：godlp/sensitive-word 要自己准备 CLI 包装（两者都是 Java 程序，需要 JDK/JRE 8+ 且 `java` 在 PATH 里），三个 Python 引擎要 pip 装依赖并跑 `python/sidecar.py`；没装/挂了会如实报错。**云端 NER API 一律不接**——原文不出本机是红线
+- 外部引擎依赖随项目走，但**首次装配需要联网**（PyPI + hf-mirror + goproxy.cn + Maven Central）：Python 包约 1.3GB、模型约 3.7GB、JDK/Go/Maven 约 600MB。装好后可离线启动。装配失败时主服务照常，探测页如实说哪个引擎不可用。**云端 NER API 一律不接**——原文不出本机是红线
+- 各引擎能力有差异：godlp 擅长结构化 PII（手机号/邮箱/身份证），sensitive-word 是敏感词库而非 PII 识别，Presidio 的中文人名/地址靠英文规则+自定义正则（人名弱），GLiNER-PII 用字符级切词（召回高但阈值需按语料调），scrubadub 在中文紧贴英文时可能漏报，OPF 首次加载慢且占内存
+- `D:\脱敏` 的 9 个数据库/统计类工具只做登记与致谢，不参与文本脱敏管线
 - 升级不删旧文件、不更新 node_modules（依赖变化被预检拦下要求人工确认）；备份保留份数可配
 - Docker、EXIF 剥离在后续版本；截图待 v1.0.0 发版时补入 `img/`
 
@@ -116,4 +124,7 @@ node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在
 | `MASK_NO_RESTART=1` | 自检模式：升级/换证书只落盘不重启 |
 | `MASK_UPGRADE_MAX_MB` | 升级包体积上限（默认 300MB） |
 | `MASK_RESTART_CHILD=1` | 接替子进程自标识（勿手工设置） |
-| `MASK_GLINER_MODEL` / `MASK_GLINER_THRESHOLD` | GLiNER-PII 模型与阈值（默认 knowledgator/gliner-pii、0.4） |
+| `MASK_GLINER_MODEL` / `MASK_GLINER_THRESHOLD` | GLiNER-PII 模型目录与阈值（默认 `python/models/gliner_multi_pii-v1`、0.4） |
+| `MASK_PYTHON` | 装配/边车使用的 Python 命令（默认 Windows `python`，其他 `python3`） |
+| `MASK_NO_SIDECAR=1` | 不自动拉起边车（自检脚本用；手动管理边车时也可用） |
+| `MASK_NO_SETUP=1` | 启动时跳过引擎装配检查（已装好且想快速启动时用） |

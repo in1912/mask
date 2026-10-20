@@ -20,6 +20,16 @@ const { sidecarProbe, sidecarDetect } = require('./sidecarAdapter');
 
 const CFG_KEY = 'mask_engines';
 
+// 项目内自带运行时（scripts/engines-setup.mjs 首次启动铺好）：命令默认指向项目内路径，
+// 不要求用户改 PATH，也不碰系统安装的 Java/Go。
+const ROOT = path.resolve(__dirname, '..', '..');
+const VENDOR = path.join(ROOT, 'vendor');
+const IS_WIN = process.platform === 'win32';
+const GODLP_BIN = path.join(VENDOR, 'godlp', IS_WIN ? 'godlp-cli.exe' : 'godlp-cli');
+const JAVA_BIN = path.join(VENDOR, 'jdk', 'bin', IS_WIN ? 'java.exe' : 'java');
+const SW_JAR = path.join(VENDOR, 'sensitive-word', 'sensitive-word-cli.jar');
+const SW_CMD = `"${JAVA_BIN}" -cp "${SW_JAR}" local.mask.SensitiveWordCli`;
+
 // ---------- 实体类型 → 内置规则 key ----------
 const TYPE_MAP = {
   EMAIL: 'email', EMAIL_ADDRESS: 'email',
@@ -33,6 +43,17 @@ const TYPE_MAP = {
   COMPANY: 'org', ORGANIZATION: 'org', ORG: 'org', DEPT: 'dept',
   WECHAT: 'wechat', QQ: 'qq', USERNAME: 'nickname', NICKNAME: 'nickname',
   MEDICAL: 'medical', AGE: 'number', AGE_CN: 'number', KEY: 'secretkey', SECRET: 'secretkey',
+  // Presidio 中文自定义识别器 / scrubadub 原生类型 / OpenAI Privacy Filter 标签
+  CN_PHONE: 'mobile', CN_ID_CARD: 'idcard', CN_BANK_CARD: 'bankcard',
+  PERSON_NAME: 'person', TWITTER: 'nickname', SKYPE: 'nickname',
+  PRIVATE_PERSON: 'person', OTHER_PERSON: 'person', PERSONAL_NAME: 'person', PERSONAL_HANDLE: 'nickname',
+  PRIVATE_EMAIL: 'email', PERSONAL_EMAIL: 'email', OTHER_EMAIL: 'email',
+  PRIVATE_PHONE: 'mobile', PERSONAL_PHONE: 'mobile', OTHER_PHONE: 'mobile',
+  PRIVATE_ADDRESS: 'address', PERSONAL_LOCATION: 'address', OTHER_LOCATION: 'address',
+  PRIVATE_DATE: 'birthday', PERSONAL_DATE: 'birthday', OTHER_DATE: 'birthday',
+  PRIVATE_URL: 'url', PERSONAL_URL: 'url', OTHER_URL: 'url', SECRET_URL: 'url',
+  ACCOUNT_NUMBER: 'bankcard', PERSONAL_FIN_ID: 'bankcard', PERSONAL_GOV_ID: 'idcard',
+  PERSONAL_HEALTH_ID: 'idcard', PERSONAL_ORG: 'org',
 };
 
 // ---------- 引擎注册表 ----------
@@ -46,29 +67,39 @@ const ENGINES = [
   {
     id: 'godlp', name: 'godlp', kind: 'stdio', hidden: false,
     vendor: '字节跳动 ByteDance', home: 'https://gitee.com/bytedance/godlp', license: 'Apache-2.0',
-    desc: 'Go 实现的数据脱敏 SDK。需自行编译/安装 CLI，并让命令按「stdin 进文本、stdout 出 {"entities":[…]} JSON」工作（可用薄包装脚本转格式，见 README）。',
-    defCommand: 'godlp',
+    desc: 'Go 实现的数据脱敏 SDK。项目自带 CLI 包装（stdin 文本 → stdout 实体 JSON），首次启动自动编译到 vendor/godlp。',
+    defCommand: `"${GODLP_BIN}"`,
   },
   {
     id: 'sensitive_word', name: 'sensitive-word', kind: 'stdio', hidden: false,
     vendor: 'houbb', home: 'https://github.com/houbb/sensitive-word', license: 'Apache-2.0',
-    desc: 'Java 中文敏感词库（百万级词库，词组识别强）。需 JDK + CLI 包装（stdin 文本 → stdout 实体 JSON），命令在设置页配置。',
-    defCommand: 'java -jar sensitive-word-cli.jar',
+    desc: 'Java 中文敏感词库（百万级词库，词组识别强）。项目自带 JDK 与 CLI 包装，首次启动自动构建 jar，无需系统装 Java。',
+    defCommand: SW_CMD,
   },
   {
     id: 'presidio', name: 'Presidio', kind: 'sidecar', hidden: false,
     vendor: 'Microsoft', home: 'https://github.com/microsoft/presidio', license: 'MIT',
-    desc: 'Python 脱敏框架（分析器+匿名化器，可插拔识别器）。pip install presidio-analyzer presidio-anonymizer spacy 后由 python/sidecar.py 承载。',
+    desc: 'Python 脱敏框架（分析器+匿名化器，可插拔识别器）。依赖装在项目内 python/vendor，由 python/sidecar.py 承载，无需系统 pip 安装。',
   },
   {
     id: 'gliner', name: 'GLiNER-PII', kind: 'sidecar', hidden: false,
     vendor: 'knowledgator', home: 'https://huggingface.co/knowledgator/gliner-pii', license: 'Apache-2.0',
-    desc: '通用信息抽取模型（零样本 NER，PII 专项微调，中英文均可）。pip install gliner 后由 python/sidecar.py 承载，首次调用会下载模型（数百 MB，纯本地推理）。',
+    desc: '通用信息抽取模型（零样本 NER，PII 专项微调，中英文均可）。模型已预取到 python/models/gliner_multi_pii-v1，纯本地推理。',
   },
   {
     id: 'argus', name: 'argus-redact', kind: 'sidecar', hidden: false,
     vendor: 'PyPI argus-redact', home: 'https://pypi.org/project/argus-redact/', license: '见 PyPI 页',
-    desc: 'Python 脱敏库。pip install argus-redact 后由 python/sidecar.py 承载（未安装或 API 不兼容会如实报错）。',
+    desc: 'Python 脱敏库（fast 档：本地正则+词表，不联网）。依赖装在项目内 python/vendor，由 python/sidecar.py 承载。',
+  },
+  {
+    id: 'scrubadub', name: 'scrubadub', kind: 'sidecar', hidden: false,
+    vendor: 'LeapBeyond', home: 'https://github.com/LeapBeyond/scrubadub', license: 'MIT',
+    desc: '文本 PII 清洗库：邮箱/电话/URL/信用卡等规则识别，输出实体与坐标。由 python/sidecar.py 承载。',
+  },
+  {
+    id: 'opf', name: 'OpenAI Privacy Filter', kind: 'sidecar', hidden: false,
+    vendor: 'OpenAI', home: 'https://huggingface.co/openai/privacy-filter', license: 'Apache-2.0',
+    desc: '1.5B MoE token 分类模型，本地 CPU 推理；模型约 2.8GB，由项目内 python/models/opf 承载。',
   },
   {
     // 隐藏引擎：边车自带的自检伪引擎（无第三方依赖，固定回两个实体），
@@ -77,7 +108,57 @@ const ENGINES = [
     vendor: '面具自带', home: '', license: 'MIT（本项目）',
     desc: 'python/sidecar.py 内置，返回固定实体，用于链路验证。',
   },
+
+  // ---------- D:\脱敏 源码归档里的数据库 / 大数据 / 统计类工具 ----------
+  // 这些工具靠连库、整表脱敏或差分隐私工作，**不产出文本实体坐标**，因此不参与
+  // 「聊天/文档文本 → 实体 → 编码」管线；仅在设置页与致谢页如实列出并说明适用场景。
+  {
+    id: 'cloakdb', name: 'CloakDB', kind: 'tool', hidden: false, applicable: false, category: 'database',
+    vendor: 'latryee', home: 'https://github.com/latryee/CloakDB', license: 'Apache-2.0',
+    desc: '数据库匿名化/差分隐私：流式处理 SQL、CSV、Parquet，保持外键与校验位。不参与文本识别。',
+  },
+  {
+    id: 'shardingsphere', name: 'Apache ShardingSphere', kind: 'tool', hidden: false, applicable: false, category: 'database',
+    vendor: 'Apache', home: 'https://shardingsphere.apache.org', license: 'Apache-2.0',
+    desc: '数据库中间件，在 SQL 路由层做字段加密/脱敏。需接入数据库，不参与文本识别。',
+  },
+  {
+    id: 'postgresql_anonymizer', name: 'postgresql_anonymizer', kind: 'tool', hidden: false, applicable: false, category: 'database',
+    vendor: 'Dalibo', home: 'https://gitlab.com/dalibo/postgresql_anonymizer', license: 'PostgreSQL License',
+    desc: 'PostgreSQL 扩展：用匿名化视图/规则脱敏整库。需数据库实例，不参与文本识别。',
+  },
+  {
+    id: 'pg_anonymize', name: 'pg_anonymize', kind: 'tool', hidden: false, applicable: false, category: 'database',
+    vendor: 'rjuju', home: 'https://github.com/rjuju/pg_anonymize', license: 'PostgreSQL License',
+    desc: 'PostgreSQL 逻辑复制脱敏插件。需数据库实例，不参与文本识别。',
+  },
+  {
+    id: 'ranger', name: 'Apache Ranger', kind: 'tool', hidden: false, applicable: false, category: 'platform',
+    vendor: 'Apache', home: 'https://ranger.apache.org', license: 'Apache-2.0',
+    desc: 'Hadoop 生态数据权限与脱敏策略中心。需大数据平台，不参与文本识别。',
+  },
+  {
+    id: 'arx', name: 'ARX', kind: 'tool', hidden: false, applicable: false, category: 'stats',
+    vendor: 'arx-deidentifier', home: 'https://github.com/arx-deidentifier/arx', license: 'Apache-2.0',
+    desc: '统计数据集匿名化（k-匿名、l-多样性、差分隐私）。面向表格数据，不参与文本识别。',
+  },
+  {
+    id: 'sdcMicro', name: 'sdcMicro', kind: 'tool', hidden: false, applicable: false, category: 'stats',
+    vendor: 'sdcTools', home: 'https://github.com/sdcTools/sdcMicro', license: 'GPL-2.0',
+    desc: 'R 包：统计披露控制与微观数据匿名化。面向表格数据，不参与文本识别。',
+  },
+  {
+    id: 'jailer', name: 'Jailer', kind: 'tool', hidden: false, applicable: false, category: 'testdata',
+    vendor: 'Wisser', home: 'https://github.com/Wisser/Jailer', license: 'Apache-2.0',
+    desc: '数据库子集提取与测试数据生成/脱敏。需数据库实例，不参与文本识别。',
+  },
+  {
+    id: 'anonimatron', name: 'anonimatron', kind: 'tool', hidden: false, applicable: false, category: 'testdata',
+    vendor: 'realrolfje', home: 'https://github.com/realrolfje/anonimatron', license: 'Apache-2.0',
+    desc: 'JDBC 数据库字段匿名化（Java CLI）。需数据库实例，不参与文本识别。',
+  },
 ];
+const isApplicable = (e) => e.applicable !== false;
 const BY_ID = new Map(ENGINES.map((e) => [e.id, e]));
 
 // ---------- 配置（settings 表 mask_engines） ----------
@@ -102,7 +183,7 @@ function getCfg() {
   if (!saved || typeof saved !== 'object') return { ...DEFAULT_CFG, enabled: { ...DEFAULT_CFG.enabled }, commands: {} };
   return {
     mode: saved.mode === 'parallel' ? 'parallel' : 'primary',
-    primary: BY_ID.has(saved.primary) ? saved.primary : 'builtin',
+    primary: (BY_ID.has(saved.primary) && isApplicable(BY_ID.get(saved.primary))) ? saved.primary : 'builtin',
     enabled: { ...DEFAULT_CFG.enabled, ...(saved.enabled || {}) },
     commands: { ...(saved.commands || {}) },
     sidecar_url: normalizeSidecarUrl(saved.sidecar_url),
@@ -112,7 +193,7 @@ function saveCfg(patch) {
   const cur = getCfg();
   const next = {
     mode: patch.mode === 'parallel' || patch.mode === 'primary' ? patch.mode : cur.mode,
-    primary: BY_ID.has(patch.primary) ? patch.primary : cur.primary,
+    primary: (BY_ID.has(patch.primary) && isApplicable(BY_ID.get(patch.primary))) ? patch.primary : cur.primary,
     enabled: (patch.enabled && typeof patch.enabled === 'object') ? patch.enabled : cur.enabled,
     commands: (patch.commands && typeof patch.commands === 'object') ? patch.commands : cur.commands,
     sidecar_url: /^\S+$/.test(String(patch.sidecar_url || '')) ? String(patch.sidecar_url).trim() : cur.sidecar_url,
@@ -133,6 +214,9 @@ function rememberProbe(id, ok, error) {
 async function probeEngine(id) {
   const e = BY_ID.get(id);
   if (!e) return { ok: false, error: '没有这个引擎' };
+  if (!isApplicable(e)) {
+    return { ok: false, applicable: false, error: `${e.name} 是数据库/统计类脱敏工具，不参与聊天与文档的文本识别，无法探测文本引擎` };
+  }
   if (e.kind === 'builtin') { rememberProbe(id, true, ''); return { ok: true }; }
   try {
     if (e.kind === 'stdio') {
@@ -154,6 +238,7 @@ async function probeEngine(id) {
 async function detectWithEngine(id, text) {
   const e = BY_ID.get(id);
   if (!e || e.kind === 'builtin') return [];
+  if (!isApplicable(e)) throw new Error(`${e.name} 不参与文本识别（数据库/统计类工具）`);
   if (e.kind === 'stdio') {
     const cmd = getCfg().commands[id] || e.defCommand;
     const r = await runStdioEngine(cmd, text, 15000);
@@ -199,8 +284,9 @@ function toCandidates(text, entities, engineId) {
 // 当前配置下需要外呼的引擎（builtin 直通不算）
 function activeExternalEngines() {
   const cfg = getCfg();
-  if (cfg.mode === 'primary') return cfg.primary !== 'builtin' ? [cfg.primary] : [];
-  return Object.keys(cfg.enabled).filter((id) => id !== 'builtin' && cfg.enabled[id] && BY_ID.has(id));
+  const usable = (id) => BY_ID.has(id) && isApplicable(BY_ID.get(id));
+  if (cfg.mode === 'primary') return cfg.primary !== 'builtin' && usable(cfg.primary) ? [cfg.primary] : [];
+  return Object.keys(cfg.enabled).filter((id) => id !== 'builtin' && cfg.enabled[id] && usable(id));
 }
 
 // 并行调用 + 并集去重（重叠取长跨度；等长取先到）。单个引擎失败不拦整体，如实带回去。
@@ -232,10 +318,11 @@ function engineList() {
   const cfg = getCfg();
   return ENGINES.map((e) => ({
     id: e.id, name: e.name, kind: e.kind, hidden: e.hidden,
+    applicable: isApplicable(e), category: e.category || 'text',
     vendor: e.vendor, home: e.home, license: e.license, desc: e.desc,
-    command: cfg.commands[e.id] || e.defCommand || '',
+    command: e.kind === 'stdio' ? (cfg.commands[e.id] || e.defCommand || '') : '',
     enabled: !!cfg.enabled[e.id],
-    last_probe: probeCache[e.id] || null,
+    last_probe: isApplicable(e) ? (probeCache[e.id] || null) : null,
   }));
 }
 function acknowledgements() {
@@ -243,9 +330,10 @@ function acknowledgements() {
   // 探测状态只是附加信息（可用/未探测/失败），不再决定是否出现在页面上
   return ENGINES.filter((e) => e.kind !== 'builtin' && !e.hidden)
     .map((e) => {
-      const p = probeCache[e.id] || null;
+      const p = isApplicable(e) ? (probeCache[e.id] || null) : null;
       return {
         name: e.name, vendor: e.vendor, home: e.home, license: e.license, desc: e.desc,
+        kind: e.kind, applicable: isApplicable(e), category: e.category || 'text',
         probe: p ? { ok: p.ok, at: p.at, error: p.error || '' } : null,
       };
     });

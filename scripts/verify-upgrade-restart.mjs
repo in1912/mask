@@ -56,7 +56,7 @@ try {
   const startOld = () => new Promise((resolve, reject) => {
     srv = spawn(process.execPath, ['--no-warnings', path.join(deployDir, 'server', 'index.js')], {
       cwd: deployDir,
-      env: { ...process.env, MASK_DATA_DIR: dataDir, MASK_UPGRADE_ROOT: deployDir, MASK_WEB_ROOT: path.join(deployDir, 'web', 'dist'), PORT: String(PORT), MASK_GEO: 'off', NODE_PATH },
+      env: { ...process.env, MASK_NO_SIDECAR: '1', MASK_DATA_DIR: dataDir, MASK_UPGRADE_ROOT: deployDir, MASK_WEB_ROOT: path.join(deployDir, 'web', 'dist'), PORT: String(PORT), MASK_GEO: 'off', NODE_PATH },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     srv.stderr.on('data', (d) => { srvLog += d; });

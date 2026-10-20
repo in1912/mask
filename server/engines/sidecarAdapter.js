@@ -4,8 +4,10 @@
 //   GET  /probe?engine=<id>            → {ok:bool, error?:string, detail?:object}
 //   POST /detect {engine, text, lang}  → {ok:bool, entities?:[{term,start,end,type}], error?:string}
 // 只连配置里的 sidecar_url（默认本机 9812），绝不外网。
-const PROBE_TIMEOUT = 8000;
-const DETECT_TIMEOUT = 30000; // GLiNER 首次调用要加载模型，给足
+// 探测会真 import 引擎：GLiNER/OPF 首次 import 要拉 torch 和模型代码，8 秒不够
+const PROBE_TIMEOUT = 30000;
+// 首次调用要加载 1~3GB 模型（CPU），30 秒会误判为失败；加载完常驻内存，之后毫秒级
+const DETECT_TIMEOUT = 180000;
 
 async function sidecarCall(base, path, init, timeoutMs) {
   const url = String(base || '').replace(/\/+$/, '') + path;

@@ -102,7 +102,7 @@ function zipStore(entries) {
 const dataDir = mkdtempSync(path.join(tmpdir(), 'mask-check-'));
 const child = spawn(process.execPath, ['server/index.js'], {
   cwd: ROOT,
-  env: { ...process.env, MASK_DATA_DIR: dataDir, PORT: String(PORT), MASK_GEO: 'off' },
+  env: { ...process.env, MASK_NO_SIDECAR: '1', MASK_DATA_DIR: dataDir, PORT: String(PORT), MASK_GEO: 'off' },
   stdio: ['ignore', 'pipe', 'pipe']
 });
 child.stderr.on('data', (d) => process.stderr.write('[server] ' + d));

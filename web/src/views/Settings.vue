@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { api, token } from '../api.js';
 
 const tab = ref('logs');
@@ -201,7 +201,10 @@ const engProbing = ref('');
 const engTesting = ref('');
 const engTest = ref({ id: '', text: '联系人张三，手机 13812345678，邮箱 test@example.com' });
 const engTestOut = ref(null);
-const KIND_ZH = { builtin: '内置', stdio: '命令行', sidecar: 'Python 边车' };
+const KIND_ZH = { builtin: '内置', stdio: '命令行', sidecar: 'Python 边车', tool: '数据工具' };
+const CATEGORY_ZH = { text: '文本识别', database: '数据库脱敏', platform: '大数据平台', stats: '统计发布', testdata: '测试数据' };
+const engText = computed(() => engVisible.value.filter((e) => e.applicable !== false));
+const engTools = computed(() => engVisible.value.filter((e) => e.applicable === false));
 async function loadEngines() {
   eng.value = await api('/engines');
   engVisible.value = eng.value.engines.filter((e) => !e.hidden);
@@ -364,7 +367,7 @@ onMounted(async () => {
       </div>
       <p v-if="engMsg" :class="engMsg.includes('不可用') || engMsg.includes('失败') ? 'err' : 'mut'" style="margin:4px 0 10px;font-size:13px">{{ engMsg }}</p>
 
-      <div v-for="e in engVisible" :key="e.id" style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:10px">
+      <div v-for="e in engText" :key="e.id" style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <input v-if="eng.config.mode === 'parallel'" type="checkbox" :checked="engIsOn(e)" @change="engToggle(e)" />
           <b :style="eng.config.mode === 'primary' && eng.config.primary === e.id ? 'color:var(--acc)' : ''">{{ e.name }}</b>
@@ -390,7 +393,26 @@ onMounted(async () => {
       </div>
 
       <div style="border-top:1px solid var(--bd);margin:14px 0 10px"></div>
-      <label class="mut">Python 边车地址（Presidio / GLiNER-PII / argus-redact 走它；先在本机跑 python python/sidecar.py）</label>
+      <p class="mut" style="font-size:12.5px;margin:0 0 8px">
+        以下工具随项目源码归档（<code>vendor/engines-src/</code>），面向数据库 / 大数据 / 统计发布场景，<b>不参与聊天与文档的文本识别</b>（不产出实体坐标）：
+      </p>
+      <div v-for="e in engTools" :key="e.id" style="border:1px dashed var(--bd);border-radius:8px;padding:8px 12px;margin-bottom:8px;opacity:.85">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <b>{{ e.name }}</b>
+          <span class="tag">{{ CATEGORY_ZH[e.category] || '数据工具' }}</span>
+          <span class="mut" style="font-size:12px">{{ e.vendor }}</span>
+          <span style="flex:1"></span>
+          <span class="tag warn">不参与文本识别</span>
+        </div>
+        <p class="mut" style="margin:4px 0 0;font-size:12px">
+          {{ e.desc }}
+          <template v-if="e.home">· <a :href="e.home" target="_blank" rel="noopener">仓库</a></template>
+          <template v-if="e.license">· 许可证 {{ e.license }}</template>
+        </p>
+      </div>
+
+      <div style="border-top:1px solid var(--bd);margin:14px 0 10px"></div>
+      <label class="mut">Python 边车地址（Presidio / GLiNER-PII / argus-redact / scrubadub / OpenAI Privacy Filter 走它；先在本机跑 python python/sidecar.py）</label>
       <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
         <input v-model="eng.config.sidecar_url" style="width:280px" placeholder="http://127.0.0.1:9812" />
         <button class="btn sm" @click="engSaveSidecar">保存地址</button>
@@ -405,7 +427,7 @@ onMounted(async () => {
       <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
         <select v-model="engTest.id">
           <option value="">选择引擎…</option>
-          <option v-for="e in engVisible" :key="e.id" :value="e.id">{{ e.name }}</option>
+          <option v-for="e in engText" :key="e.id" :value="e.id">{{ e.name }}</option>
         </select>
         <input v-model="engTest.text" style="flex:1;min-width:240px" placeholder="试跑文本" />
         <button class="btn sm" :disabled="!!engTesting" @click="engDoTest">{{ engTesting ? '运行中…' : '运行' }}</button>
@@ -424,7 +446,7 @@ onMounted(async () => {
         </template>
         <p v-else class="err">{{ engTestOut.error }}</p>
       </div>
-      <p class="mut" style="font-size:12px;margin-top:10px">红线：所有引擎都在本机运行，原文不出网；引擎失败会如实报错、不会假装脱敏成功。探测成功的引擎会出现在「致谢」页。</p>
+      <p class="mut" style="font-size:12px;margin-top:10px">红线：所有引擎都在本机运行，原文不出网；引擎失败会如实报错、不会假装脱敏成功。项目引用的开源引擎都会出现在「致谢」页。</p>
     </div>
 
     <div v-else-if="tab === 'ack'" class="card">
@@ -433,10 +455,14 @@ onMounted(async () => {
       <div v-for="(a, i) in ackItems" :key="i" style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <b>{{ a.name }}</b><span class="mut">{{ a.vendor }}</span>
+          <span class="tag">{{ CATEGORY_ZH[a.category] || '文本识别' }}</span>
           <span style="flex:1"></span>
-          <span v-if="a.probe && a.probe.ok" class="tag ok">可用 ✓ {{ (a.probe.at || '').slice(0, 16).replace('T', ' ') }}</span>
-          <span v-else-if="a.probe" class="tag danger">探测失败</span>
-          <span v-else class="tag">未探测（装好后在「引擎」页点探测）</span>
+          <template v-if="a.applicable !== false">
+            <span v-if="a.probe && a.probe.ok" class="tag ok">可用 ✓ {{ (a.probe.at || '').slice(0, 16).replace('T', ' ') }}</span>
+            <span v-else-if="a.probe" class="tag danger">探测失败</span>
+            <span v-else class="tag">未探测（装好后在「引擎」页点探测）</span>
+          </template>
+          <span v-else class="tag warn">不参与文本识别</span>
         </div>
         <p class="mut" style="margin:4px 0 0;font-size:12px">
           <a v-if="a.home" :href="a.home" target="_blank" rel="noopener">{{ a.home }}</a>

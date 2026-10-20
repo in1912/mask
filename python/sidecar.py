@@ -36,6 +36,18 @@ try:  # Windows 控制台 UTF-8 输出，避免中文日志乱码
 except Exception:
     pass
 
+# 项目内依赖目录（pip --target 安装）/ 模型目录：首次启动由 scripts/engines-setup.mjs 铺好
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_VENDOR = os.path.join(_HERE, "vendor")
+_MODELS = os.path.join(_HERE, "models")
+if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
+    sys.path.insert(0, _VENDOR)
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HOME", os.path.join(_MODELS, "hf"))
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+os.environ.setdefault("OPF_CHECKPOINT", os.path.join(_MODELS, "opf"))
+os.environ.setdefault("MASK_GLINER_MODEL", os.path.join(_MODELS, "gliner_multi_pii-v1"))
+
 MAX_TEXT = 2 * 1024 * 1024  # 2MB 文本上限
 _locks = {}
 _loaded = {}  # 引擎单例缓存
@@ -73,20 +85,62 @@ def _presidio_engine():
     with _lock("presidio"):
         if "presidio" in _loaded:
             return _loaded["presidio"]
-        from presidio_analyzer import AnalyzerEngine  # noqa: 惰性导入
-        eng = AnalyzerEngine()
+        # NoOpNlpEngine：不需要下载 spaCy 模型；Presidio 的规则识别器本来就不依赖 NER。
+        # 中文结构化类型（手机号/身份证/银行卡）用自定义正则识别器补上。
+        from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, Pattern, PatternRecognizer  # noqa: 惰性导入
+        from presidio_analyzer.nlp_engine import NoOpNlpEngine
+
+        nlp = NoOpNlpEngine([{"lang_code": "zh", "model_name": "noop"}, {"lang_code": "en", "model_name": "noop"}])
+        registry = RecognizerRegistry(supported_languages=["zh", "en"])
+        registry.load_predefined_recognizers(languages=["en"])
+        # NoOpNlpEngine 不能和依赖 NLP 的识别器共存；预置列表里的 SpacyRecognizer 必须摘掉，
+        # 否则 AnalyzerEngine 构造直接 ValueError（其余规则识别器不受影响）。
+        for rec in list(registry.recognizers):
+            if rec.__class__.__name__ in ("SpacyRecognizer", "StanzaRecognizer"):
+                try:
+                    registry.remove_recognizer(rec.name)
+                except Exception:
+                    registry.recognizers.remove(rec)
+        for name, regex, entity, score in (
+            ("cn_mobile", r"(?<!\d)1[3-9]\d{9}(?!\d)", "CN_PHONE", 0.85),
+            ("cn_id_card", r"(?<!\d)\d{17}[\dXx](?!\d)", "CN_ID_CARD", 0.85),
+            ("cn_bank_card", r"(?<!\d)\d{16,19}(?!\d)", "CN_BANK_CARD", 0.55),
+        ):
+            registry.add_recognizer(PatternRecognizer(
+                supported_entity=entity, name=name, supported_language="zh",
+                patterns=[Pattern(name=name, regex=regex, score=score)],
+            ))
+        eng = AnalyzerEngine(registry=registry, nlp_engine=nlp, supported_languages=["zh", "en"])
         _loaded["presidio"] = eng
         return eng
 
 
+# Presidio 的类型名 → 主进程 TYPE_MAP 认识的名字
+_PRESIDIO_TYPES = {
+    "CN_PHONE": "PHONE", "CN_ID_CARD": "ID_CARD", "CN_BANK_CARD": "BANK_ACCOUNT",
+    "EMAIL_ADDRESS": "EMAIL", "PHONE_NUMBER": "PHONE", "CREDIT_CARD": "BANK_ACCOUNT",
+    "IP_ADDRESS": "IP", "URL": "URL", "IBAN_CODE": "BANK_ACCOUNT",
+    "PERSON": "PERSON", "LOCATION": "ADDRESS", "ORG": "ORGANIZATION",
+}
+
+
 def _presidio_entities(text, lang):
     analyzer = _presidio_engine()
-    language = lang or ("zh" if _cjk_ratio(text) > 0.3 else "en")
-    results = analyzer.analyze(text=text, language=language, score_threshold=0.4)
-    return [
-        {"term": text[r.start:r.end], "start": r.start, "end": r.end, "type": r.entity_type}
-        for r in results
-    ]
+    # 中英文识别器各跑一遍再合并：中文文本里的邮箱/URL 也能被英文规则吃到，
+    # 中英混排时也不用赌语言判定（宁多跑一遍，不漏手机号/身份证）。
+    langs = ["zh", "en"]
+    seen, out = set(), []
+    for lg in langs:
+        for r in analyzer.analyze(text=text, language=lg, score_threshold=0.4):
+            key = (r.start, r.end, r.entity_type)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "term": text[r.start:r.end], "start": r.start, "end": r.end,
+                "type": _PRESIDIO_TYPES.get(r.entity_type, r.entity_type),
+            })
+    return out
 
 
 # ---------------------------------------------------------------- GLiNER-PII
@@ -97,13 +151,29 @@ GLINER_LABELS = [
 ]
 
 
+class _CjkWordsSplitter:
+    """GLiNER 默认按空白切词——中文整句会变成一个「词」，实体边界全丢。
+    这里把中日韩字符逐个切开，英文/数字/邮箱/网址仍按整段切。"""
+    _RE = re.compile(r"[㐀-䶿一-鿿]|[A-Za-z0-9_@.+%:/\\-]+|\S")
+
+    def __call__(self, text):
+        for m in self._RE.finditer(text):
+            yield (m.group(0), m.start(), m.end())
+
+
 def _gliner_engine():
     with _lock("gliner"):
         if "gliner" in _loaded:
             return _loaded["gliner"]
         from gliner import GLiNER  # noqa: 惰性导入
-        model_id = os.environ.get("MASK_GLINER_MODEL", "knowledgator/gliner-pii")
-        model = GLiNER.from_pretrained(model_id)
+        model_id = os.environ.get("MASK_GLINER_MODEL", "urchade/gliner_multi_pii-v1")
+        if os.path.isdir(model_id):
+            model = GLiNER.from_pretrained(model_id, local_files_only=True)
+        else:
+            model = GLiNER.from_pretrained(model_id)
+        # from_pretrained 会把额外 kwargs 同时传给模型构造器（那里不认 words_splitter），
+        # 所以加载完再替换数据处理器里的切词器。
+        model.data_processor.words_splitter = _CjkWordsSplitter()
         _loaded["gliner"] = model
         return model
 
@@ -120,41 +190,98 @@ def _gliner_entities(text):
 
 
 # ---------------------------------------------------------------- argus-redact
-# PyPI 包，公开 API 形态没有跨版本稳定承诺：这里尝试常见入口，都失败就如实报错，
-# 提示用户在 sidecar.py 里补一小段适配（函数就一个，改起来十分钟）。
-def _argus_entities(text):
+# argus_redact.redact(text, report=True) → RedactReport，其中 entities 是
+# 带 original/start/end/type 的字典元组（0.8.x 实测形态）。默认 fast 档只跑
+# 正则+本地词表，不联网；ner/auto 档才会碰外部模型，面具不启用。
+def _argus_entities(text, lang):
     try:
         import argus_redact  # noqa: 惰性导入
     except ImportError as e:
         raise RuntimeError("未安装：pip install argus-redact（%s）" % e)
-    cands = []
-    for fn_name in ("redact", "redact_text", "find_pii", "extract_pii", "scan"):
-        fn = getattr(argus_redact, fn_name, None)
-        if callable(fn):
-            cands.append(fn_name)
-    if not cands:
-        raise RuntimeError(
-            "argus-redact 已安装但没找到可用入口（试过 %s）。请在 python/sidecar.py 的 _argus_entities 里按其文档补适配"
-            % ", ".join(cands or ["-"])
-        )
-    # 先试最常见形态：fn(text) → 带偏移的结果列表
-    fn = getattr(argus_redact, cands[0])
+    language = lang or ("zh" if _cjk_ratio(text) > 0.05 else "en")
     try:
-        raw = fn(text)
+        rep = argus_redact.redact(text, lang=language, mode="fast", report=True)
+    except TypeError:
+        # 老版本没有 report/mode 参数，退回默认返回值并如实说明拿不到实体
+        raise RuntimeError("argus-redact 版本过旧：需要支持 report=True 的版本（>=0.8）")
     except Exception as e:
         raise RuntimeError("argus-redact 调用失败：%s" % e)
     out = []
-    for it in raw or []:
-        if isinstance(it, dict):
-            term = it.get("text") or it.get("term") or it.get("match") or ""
-            s = it.get("start", 0)
-            e_ = it.get("end", 0)
-            typ = it.get("type") or it.get("label") or "ARGUS"
-            if term:
-                out.append({"term": term, "start": s, "end": e_, "type": typ})
-        elif isinstance(it, (tuple, list)) and len(it) >= 3:
-            s, e_, term = it[0], it[1], it[2]
-            out.append({"term": term, "start": s, "end": e_, "type": "ARGUS"})
+    for it in getattr(rep, "entities", ()) or ():
+        term = (it.get("original") or "") if isinstance(it, dict) else ""
+        if not term:
+            continue
+        out.append({
+            "term": term,
+            "start": int(it.get("start", 0)),
+            "end": int(it.get("end", 0)),
+            "type": str(it.get("type") or "ARGUS"),
+        })
+    return out
+
+
+# ---------------------------------------------------------------- scrubadub
+def _scrubadub_engine():
+    with _lock("scrubadub"):
+        if "scrubadub" in _loaded:
+            return _loaded["scrubadub"]
+        import scrubadub  # noqa: 惰性导入
+        scrubber = scrubadub.Scrubber()
+        _loaded["scrubadub"] = scrubber
+        return scrubber
+
+
+def _scrubadub_entities(text, lang):
+    scrubber = _scrubadub_engine()
+    out = []
+    for f in scrubber.iter_filth(text):
+        beg, end = getattr(f, "beg", None), getattr(f, "end", None)
+        term = getattr(f, "text", "") or ""
+        if beg is None or end is None or not term:
+            continue
+        out.append({"term": term, "start": beg, "end": end,
+                    "type": str(getattr(f, "type", "") or "PII").upper()})
+    return out
+
+
+# ---------------------------------------------------------------- OpenAI Privacy Filter
+# 1.5B MoE token 分类模型，纯本地 CPU 推理；模型目录由 scripts/engines-setup.mjs 预先下载。
+def _opf_engine():
+    with _lock("opf"):
+        if "opf" in _loaded:
+            return _loaded["opf"]
+        from opf import OPF  # noqa: 惰性导入
+        eng = OPF(model=os.environ.get("OPF_CHECKPOINT") or None, device="cpu")
+        _loaded["opf"] = eng
+        return eng
+
+
+_OPF_TYPES = {
+    "private_person": "PERSON", "other_person": "PERSON",
+    "personal_name": "PERSON", "personal_handle": "NICKNAME",
+    "private_email": "EMAIL", "personal_email": "EMAIL", "other_email": "EMAIL",
+    "private_phone": "PHONE", "personal_phone": "PHONE", "other_phone": "PHONE",
+    "private_address": "ADDRESS", "personal_location": "ADDRESS", "other_location": "ADDRESS",
+    "private_date": "DATE_TIME", "personal_date": "DATE_TIME", "other_date": "DATE_TIME",
+    "private_url": "URL", "personal_url": "URL", "other_url": "URL", "secret_url": "URL",
+    "account_number": "BANK_ACCOUNT", "personal_fin_id": "BANK_ACCOUNT",
+    "personal_gov_id": "ID_CARD", "personal_health_id": "ID_CARD",
+    "personal_org": "ORGANIZATION", "secret": "SECRET",
+}
+
+
+def _opf_entities(text, lang):
+    eng = _opf_engine()
+    res = eng.redact(text)
+    out = []
+    for sp in getattr(res, "detected_spans", ()) or ():
+        term = getattr(sp, "text", "") or ""
+        if not term:
+            continue
+        out.append({
+            "term": term, "start": int(getattr(sp, "start", 0)), "end": int(getattr(sp, "end", 0)),
+            "type": _OPF_TYPES.get(getattr(sp, "label", ""), getattr(sp, "label", "")),
+        })
     return out
 
 
@@ -167,9 +294,21 @@ ENGINES = {
     },
     "presidio": {
         "module": "presidio_analyzer",
-        "pip": "pip install presidio-analyzer presidio-anonymizer spacy && python -m spacy download en_core_web_md",
+        "pip": "pip install presidio-analyzer presidio-anonymizer spacy",
         "detect": lambda text, lang: _presidio_entities(text, lang),
-        "note": "Microsoft Presidio 分析器",
+        "note": "Microsoft Presidio 分析器（NoOp NLP + 中文结构化规则，无需 spaCy 模型）",
+    },
+    "scrubadub": {
+        "module": "scrubadub",
+        "pip": "pip install scrubadub",
+        "detect": lambda text, lang: _scrubadub_entities(text, lang),
+        "note": "LeapBeyond/scrubadub（邮箱/电话/URL/信用卡等规则识别）",
+    },
+    "opf": {
+        "module": "opf",
+        "pip": "pip install <本地 privacy-filter>（模型由 scripts/engines-setup.mjs 下载）",
+        "detect": lambda text, lang: _opf_entities(text, lang),
+        "note": "OpenAI Privacy Filter（1.5B MoE，本地 CPU 推理）",
     },
     "gliner": {
         "module": "gliner",
@@ -180,8 +319,8 @@ ENGINES = {
     "argus": {
         "module": "argus_redact",
         "pip": "pip install argus-redact",
-        "detect": lambda text, lang: _argus_entities(text),
-        "note": "PyPI argus-redact（API 兼容性自适配备尽力）",
+        "detect": lambda text, lang: _argus_entities(text, lang),
+        "note": "PyPI argus-redact（fast 档：本地正则+词表，不联网）",
     },
 }
 

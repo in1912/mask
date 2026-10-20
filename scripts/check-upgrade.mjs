@@ -81,7 +81,7 @@ function buildPack({ version, dist, serverDir = path.join(ROOT, 'server'), extra
 const child = spawn(process.execPath, ['server/index.js'], {
   cwd: ROOT,
   env: {
-    ...process.env, MASK_DATA_DIR: dataDir, PORT: String(PORT), MASK_GEO: 'off',
+    ...process.env, MASK_NO_SIDECAR: '1', MASK_DATA_DIR: dataDir, PORT: String(PORT), MASK_GEO: 'off',
     MASK_UPGRADE_ROOT: repo, MASK_WEB_ROOT: path.join(repo, 'web'),
     MASK_NO_RESTART: '1', MASK_UPGRADE_MAX_MB: '1',
   },

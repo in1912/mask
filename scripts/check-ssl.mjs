@@ -35,7 +35,7 @@ const dataDir = mkdtempSync(path.join(tmpdir(), 'mask-ssl-'));
 let srv = null, srvLog = '';
 
 function startServer() {
-  srv = spawn('node', ['server/index.js'], { cwd: ROOT, env: { ...process.env, MASK_DATA_DIR: dataDir, PORT: String(PORT), MASK_GEO: 'off', MASK_NO_RESTART: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  srv = spawn('node', ['server/index.js'], { cwd: ROOT, env: { ...process.env, MASK_NO_SIDECAR: '1', MASK_DATA_DIR: dataDir, PORT: String(PORT), MASK_GEO: 'off', MASK_NO_RESTART: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   srv.stderr.on('data', (d) => { srvLog += d; });
   srv.stdout.on('data', (d) => { srvLog += d; });
 }
