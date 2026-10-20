@@ -16,6 +16,14 @@ services:
       MASK_NO_SETUP: '1'
     volumes:
       - ./data:/app/data
-      # 装了外部引擎后再放开这两行，容器重建不必重装（宿主机目录会变几个 GB）
+      # 用「设置 → 引擎 → 外部引擎依赖」装完后，放开对应挂载，容器重建不必重装。
+      # 只挂输出目录，别整目录挂 ./vendor（会盖掉镜像里的引擎源码与 Dockerfile 构建产物）。
       # - ./python/vendor:/app/python/vendor
       # - ./python/models:/app/python/models
+      # - ./vendor/jdk:/app/vendor/jdk
+      # - ./vendor/go:/app/vendor/go
+      # - ./vendor/maven:/app/vendor/maven
+      # - ./vendor/maven-repo:/app/vendor/maven-repo
+      # - ./vendor/dl:/app/vendor/dl
+      # - ./vendor/godlp:/app/vendor/godlp
+      # - ./vendor/sensitive-word:/app/vendor/sensitive-word

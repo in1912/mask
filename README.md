@@ -46,13 +46,31 @@ npm run pack:dist      # 产物在仓库根目录（*.zip 已在 .gitignore，�
 
 三个包都**不含任何个人数据**：`data/` 是空目录，首次启动自动建库（默认管理员 `aiadmin / admin123`，登录后请立刻改）。`Logs/`、`web/src/`、旧的前端构建、`python/vendor`、`python/models`、JDK/Go/Maven 运行时都不进包。
 
-**外部引擎**：内置规则引擎开箱即用。Windows 包首次启动会装配 Python 引擎并自动下载 JDK/Go/Maven 构建 godlp、sensitive-word；macOS 包只装配 Python 引擎（godlp/sensitive-word 的自动构建目前只按 Windows 编写）；Docker 镜像（v0.4.1+）已内置 godlp 与 sensitive-word，Python 引擎默认不装配，需要时执行 `docker compose exec mask node scripts/engines-setup.mjs` 并持久化 `python/vendor`、`python/models`。装配需要联网、体积数 GB，失败不拦主服务，设置 → 引擎里如实报哪个不可用。
+**外部引擎**：内置规则引擎开箱即用。Windows 包首次启动会装配 Python 引擎并自动下载 JDK/Go/Maven 构建 godlp、sensitive-word；Linux（含 Docker）同样支持自动下载与构建，但默认 `MASK_NO_SETUP=1`，由管理员在**设置 → 引擎 → 外部引擎依赖**里点按钮按需安装；macOS 包只装配 Python 引擎（godlp/sensitive-word 的自动构建目前按 Windows/Linux 编写，macOS 未实机验证）。装配需要联网、体积数百 MB 到数 GB，失败不拦主服务，设置 → 引擎里如实报哪个不可用。
+
+**Docker 里装的东西会跟着容器走**：在线安装落在 `/app/vendor`、`/app/python`，容器重建就没了。要长期保留，把输出目录挂成宿主机卷（不要整目录挂 `vendor/`——那会盖掉镜像里的引擎源码）：
+
+```yaml
+volumes:
+  - ./data:/app/data
+  - ./vendor/jdk:/app/vendor/jdk
+  - ./vendor/go:/app/vendor/go
+  - ./vendor/maven:/app/vendor/maven
+  - ./vendor/maven-repo:/app/vendor/maven-repo
+  - ./vendor/dl:/app/vendor/dl
+  - ./vendor/godlp:/app/vendor/godlp
+  - ./vendor/sensitive-word:/app/vendor/sensitive-word
+  - ./python/vendor:/app/python/vendor
+  - ./python/models:/app/python/models
+```
+
+v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引擎；Python 引擎仍按需装。
 
 **Docker 镜像里内置了什么**：v0.4.1 起 Dockerfile 用多阶段构建，镜像内直接带好 **godlp**（Go 静态二进制）与 **sensitive-word**（Maven 打出的 jar + JRE 17 软链），两个命令行引擎开箱即用，默认命令本来就指向 `vendor/` 下这两个路径，无需改设置。Python 引擎仍按需装配（数 GB）。
 
 **验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
 
-## 功能（v0.4.1）
+## 功能（v0.4.2）
 
 | 菜单 | 说明 |
 |---|---|
@@ -64,7 +82,7 @@ npm run pack:dist      # 产物在仓库根目录（*.zip 已在 .gitignore，�
 | 脱敏历史 | 时间/来源/用户/项数，点击展开对照表快照与脱敏后文本；二次复核（残留代码/未引用项）；默认 10 条可切 10/20/30/50/100 |
 | 脱敏原理 | 静态说明 |
 | 用户管理 | 独立用户库（管理员）：创建/重置密码/停用/解锁/删除；文档与 Agent 链接按用户隔离（管理员可见全部） |
-| 系统设置 | 登录日志（三态、地区、尝试的密码加密、客户端、一键封禁 IP，默认 5 条可切 5/15/30/50/100）；IP 黑名单（全站第一道闸）；AI 配置（OpenAI 兼容 + 测试连接）；**引擎**（多引擎切换，见下）；**致谢**（引用的开源引擎及本机可用状态）；**升级**（上传 zip 在线升级）；**HTTPS 证书**（自签名，同端口双协议）；系统信息（ICP 备案文案留空则登录页不显示） |
+| 系统设置 | 登录日志（三态、地区、尝试的密码加密、客户端、一键封禁 IP，默认 5 条可切 5/15/30/50/100）；IP 黑名单（全站第一道闸）；AI 配置（OpenAI 兼容 + 测试连接）；**引擎**（多引擎切换 + **一键安装外部引擎依赖**，见下）；**致谢**（引用的开源引擎及本机可用状态）；**升级**（上传 zip 在线升级）；**HTTPS 证书**（自签名，同端口双协议）；系统信息（ICP 备案文案留空则登录页不显示） |
 
 **安全语义**：同一会话内同一实体始终同码（AI 上下文连贯）；上行自动注入「占位符保留」系统指令；总开关关闭时如实提示未脱敏，绝不假装；同 IP 5 分钟 8 次、同账号 15 分钟 5 次失败临时拦截、10 次永久锁定。
 
@@ -94,7 +112,16 @@ npm run pack:dist      # 产物在仓库根目录（*.zip 已在 .gitignore，�
 
 内置规则引擎之外可接入外部本地引擎，设置 → 引擎 里配置**主引擎（单选，内置让位）**或**并行使用（并集去重）**。所有引擎都在本机跑，原文不出网；全部外部引擎都进「致谢」页（引用即致谢），探测状态只作附加信息。
 
-**首次启动自动装配**：`npm start` / `启动.cmd` 会先跑 `scripts/engines-setup.mjs`——把 Python 依赖装进 `python/vendor/`、模型预取到 `python/models/`、JDK/Go/Maven 解压到 `vendor/`、编译 godlp CLI 与 sensitive-word jar。检查是幂等的：装好后每次启动只做存在性检查，秒过且完全离线。装配失败不拦主服务，缺哪个引擎就在探测页如实报哪个。
+**首次启动自动装配**：`npm start` / `启动.cmd` 会先跑安装器——把 Python 依赖装进 `python/vendor/`、模型预取到 `python/models/`、JDK/Go/Maven 解压到 `vendor/`、编译 godlp CLI 与 sensitive-word jar。检查是幂等的：装好后每次启动只做存在性检查，秒过且完全离线。装配失败不拦主服务，缺哪个引擎就在探测页如实报哪个。
+
+**网页里一键装依赖（v0.4.2）**：设置 → 引擎 → **外部引擎依赖**，三个按钮：
+- **安装命令行引擎**：下载 JDK + Go + Maven，现场编译 godlp 与 sensitive-word（约 500MB~1GB，通常 5~15 分钟）；
+- **安装 Python 引擎**：pip 依赖 + GLiNER/OPF 模型（数 GB）；
+- **全部安装**：两者都装。
+
+点下去后日志实时显示（同时写 `Logs/engines-setup-<时间戳>.log`），同一时刻只允许一个安装任务（再点回 409）。Docker 镜像默认 `MASK_NO_SETUP=1`，这个按钮就是为「不想重建镜像、但要用命令行引擎」准备的；安装结果在容器内，重建会丢（持久化卷配置见上文「三端分发包」）。安装器本体在 `server/services/enginesInstaller.js`（放在 `server/` 下才能随在线升级包一起升上去），`scripts/engines-setup.mjs` 与 `npm run setup:engines` 只是命令行入口，参数一致。
+
+平台边界（如实说）：Windows x64 与 Linux x64/arm64 会自动下载并构建命令行引擎；macOS 目前只装 Python 引擎。Linux 构建已按 Docker 的目录布局在本机等价复跑（godlp 静态 ELF、sensitive-word jar），但**开发机没有 Docker，未在真容器里跑完整按钮流程**。
 
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
@@ -140,11 +167,11 @@ npm run pack:dist      # 产物在仓库根目录（*.zip 已在 .gitignore，�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 61 + ssl 16 + engines 45 = 355 项
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 61 + ssl 16 + engines 45 + setup 18 = 373 项
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 
-`check-chat` / `check-files` 用桩 AI 做泄漏断言：桩收到的请求体与分享页 HTML 里**不允许出现**手机号/公司名/金额明文；流式增量拼接必须与最终复原文本逐字节一致（半码不外泄）；匿名回文者拿不回复原结果；过期/撤销/删除的链接即刻 410/404。`check-engines` 起真边车 + stdio mock 验证多引擎全链路（含主引擎失败 502、并行去重、坐标重定位）。
+`check-chat` / `check-files` 用桩 AI 做泄漏断言：桩收到的请求体与分享页 HTML 里**不允许出现**手机号/公司名/金额明文；流式增量拼接必须与最终复原文本逐字节一致（半码不外泄）；匿名回文者拿不回复原结果；过期/撤销/删除的链接即刻 410/404。`check-engines` 起真边车 + stdio mock 验证多引擎全链路（含主引擎失败 502、并行去重、坐标重定位）。`check-setup` 用临时 mock 脚本验证「一键安装依赖」的权限、scope 白名单、单任务互斥、日志采集、成功/失败退出码与日志落盘——**自检绝不联网下载真实依赖**。
 
 ## 诚实边界（当前版本）
 
@@ -156,6 +183,7 @@ node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在
 - 批量脱敏输出只有 `.txt`：排版、图片、表格样式不保留；批次文件不会自动清理，磁盘自己管 [删除批次]
 - 批量的人名识别依赖上下文或同批已确认实体：全新批次里孤立出现、又没有「联系人：」这类锚点的姓名仍可能漏（可把姓名加进「固定关键词」，或在第一份文件里带语境出现一次）
 - 外部引擎依赖随项目走，但**首次装配需要联网**（PyPI + hf-mirror + goproxy.cn + Maven Central）：Python 包约 1.3GB、模型约 3.7GB、JDK/Go/Maven 约 600MB。装好后可离线启动。装配失败时主服务照常，探测页如实说哪个引擎不可用。**云端 NER API 一律不接**——原文不出本机是红线
+- 「一键安装依赖」按钮在 Windows 路径已本机验证（已装好时全部跳过）；Linux 的下载/解压/编译逻辑已按 Docker 目录布局等价复跑，但**没有在真容器里点过完整流程**，首次在线上安装请预留十几分钟并看实时日志。Docker 里装的东西不挂卷就会随容器重建丢失
 - 各引擎能力有差异：godlp 擅长结构化 PII（手机号/邮箱/身份证），sensitive-word 是敏感词库而非 PII 识别，Presidio 的中文人名/地址靠英文规则+自定义正则（人名弱），GLiNER-PII 用字符级切词（召回高但阈值需按语料调），scrubadub 在中文紧贴英文时可能漏报，OPF 首次加载慢且占内存
 - `D:\脱敏` 的 9 个数据库/统计类工具只做登记与致谢，不参与文本脱敏管线
 - 升级不删旧文件、不更新 node_modules（依赖变化被预检拦下要求人工确认）；备份保留份数可配
@@ -176,5 +204,7 @@ node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在
 | `MASK_RESTART_CHILD=1` | 接替子进程自标识（勿手工设置） |
 | `MASK_GLINER_MODEL` / `MASK_GLINER_THRESHOLD` | GLiNER-PII 模型目录与阈值（默认 `python/models/gliner_multi_pii-v1`、0.4） |
 | `MASK_PYTHON` | 装配/边车使用的 Python 命令（默认 Windows `python`，其他 `python3`） |
+| `MASK_ENGINE_SETUP_LOG_DIR` | 「一键安装依赖」日志目录（默认 `Logs/`；自检指向临时目录） |
+| `MASK_ENGINES_SETUP_SCRIPT` | 安装器路径覆盖（自检用，勿在生产手工设置） |
 | `MASK_NO_SIDECAR=1` | 不自动拉起边车（自检脚本用；手动管理边车时也可用） |
 | `MASK_NO_SETUP=1` | 启动时跳过引擎装配检查（已装好且想快速启动时用） |

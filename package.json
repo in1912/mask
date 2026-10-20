@@ -1,6 +1,6 @@
 {
   "name": "mask",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "面具 · AI 脱敏系统",
   "engines": {
@@ -14,13 +14,14 @@
     "check:server": "node scripts/check-server.mjs",
     "check:chat": "node scripts/check-chat.mjs",
     "check:files": "node scripts/check-files.mjs",
-    "check": "node scripts/check-engine.mjs && node scripts/check-server.mjs && node scripts/check-chat.mjs && node scripts/check-files.mjs && node scripts/check-batch.mjs && node scripts/check-upgrade.mjs && node scripts/check-ssl.mjs && node scripts/check-engines.mjs",
+    "check": "node scripts/check-engine.mjs && node scripts/check-server.mjs && node scripts/check-chat.mjs && node scripts/check-files.mjs && node scripts/check-batch.mjs && node scripts/check-upgrade.mjs && node scripts/check-ssl.mjs && node scripts/check-engines.mjs && node scripts/check-setup.mjs",
     "pack:upgrade": "node scripts/build-upgrade-pack.mjs",
     "check:upgrade": "node scripts/check-upgrade.mjs",
     "check:ssl": "node scripts/check-ssl.mjs",
     "check:engines": "node scripts/check-engines.mjs",
     "check:batch": "node scripts/check-batch.mjs",
-    "pack:dist": "node scripts/build-dist-packages.mjs"
+    "pack:dist": "node scripts/build-dist-packages.mjs",
+    "check:setup": "node scripts/check-setup.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

@@ -3,6 +3,7 @@
 // 不落库、不产生对照——探测用的样例文本不进日志。
 const express = require('express');
 const engines = require('../engines');
+const engineSetup = require('../services/engineSetupService');
 const { toCandidates } = engines;
 
 const router = express.Router();
@@ -10,6 +11,19 @@ router.use((req, res, next) => {
   if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: '引擎管理仅管理员' });
   next();
 });
+
+// 外部引擎依赖安装（v0.4.2）：只跑项目内的 scripts/engines-setup.mjs，scope 白名单。
+router.post('/setup', (req, res) => {
+  const scope = String((req.body || {}).scope || 'cli');
+  try {
+    const r = engineSetup.start(scope);
+    console.log(`[engines] 管理员 ${req.user.username} 触发引擎依赖安装（${scope}）`);
+    res.json(r);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+router.get('/setup/status', (req, res) => res.json(engineSetup.status()));
 
 // 引擎注册表 + 当前配置 + 最近探测结果（设置页「引擎」tab 数据源）
 router.get('/', (req, res) => {

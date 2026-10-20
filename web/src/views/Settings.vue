@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { api, token } from '../api.js';
 
 const tab = ref('logs');
@@ -266,12 +266,59 @@ async function engDoTest() {
   engTesting.value = '';
 }
 
+// 外部引擎依赖安装（v0.4.2）：网页里触发 scripts/engines-setup.mjs，轮询日志
+const setup = ref({ running: false, scope: '', started_at: '', finished_at: '', ok: null, exit_code: null, error: '', lines: [], platform: '', arch: '', cli_supported: true });
+let setupTimer = null;
+const setupElapsed = computed(() => {
+  if (!setup.value.started_at) return '';
+  const end = setup.value.running ? Date.now() : Date.parse(setup.value.finished_at || Date.now());
+  const s = Math.max(0, Math.round((end - Date.parse(setup.value.started_at)) / 1000));
+  return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`;
+});
+function stopSetupPolling() {
+  if (setupTimer) { clearInterval(setupTimer); setupTimer = null; }
+}
+function startSetupPolling() {
+  if (setupTimer) return;
+  setupTimer = setInterval(async () => {
+    try {
+      const s = await api('/engines/setup/status');
+      setup.value = s;
+      if (!s.running) {
+        stopSetupPolling();
+        await loadEngines();
+        engMsg.value = s.ok ? '外部引擎依赖安装完成，点对应引擎的「探测」验证' : `安装失败：${s.error || '看下方日志'}`;
+      }
+    } catch { /* 网络抖动，下一拍再试 */ }
+  }, 1500);
+}
+async function loadSetupStatus() {
+  setup.value = await api('/engines/setup/status');
+  if (setup.value.running) startSetupPolling();
+}
+async function startSetup(scope) {
+  const sizeZh = scope === 'cli' ? '命令行引擎（JDK + Go + Maven + godlp + sensitive-word），下载约 500MB~1GB，通常 5~15 分钟'
+    : scope === 'python' ? 'Python 引擎（pip 依赖 + 两个模型），数 GB，可能十几分钟到半小时'
+      : '全部外部引擎（命令行 + Python），数 GB，时间较长';
+  if (!confirm(`开始安装${sizeZh}。\n\n安装期间请勿关闭容器；进度和错误会实时显示在下方。继续？`)) return;
+  try {
+    setup.value = await api('/engines/setup', { method: 'POST', body: { scope } });
+    engMsg.value = '';
+    startSetupPolling();
+  } catch (e) { engMsg.value = e.message; }
+}
+
 // 致谢（探测成功的外部引擎）
 const ackItems = ref([]);
 async function loadAck() { ackItems.value = (await api('/engines/ack')).items; }
 
-const loadByTab = { logs: loadLogs, blacklist: loadBlacklist, ai: loadAi, engines: loadEngines, ack: loadAck, upgrade: loadUp, ssl: loadSsl, system: loadSys };
+async function loadEnginesTab() {
+  await loadEngines();
+  try { await loadSetupStatus(); } catch { /* 状态接口失败不影响引擎列表 */ }
+}
+const loadByTab = { logs: loadLogs, blacklist: loadBlacklist, ai: loadAi, engines: loadEnginesTab, ack: loadAck, upgrade: loadUp, ssl: loadSsl, system: loadSys };
 function switchTab(id) { tab.value = id; loadByTab[id](); }
+onUnmounted(stopSetupPolling);
 const forbidden = ref('');
 onMounted(async () => {
   try { await loadLogs(); } catch (e) { forbidden.value = e.message; }
@@ -362,6 +409,37 @@ onMounted(async () => {
     </div>
 
     <div v-else-if="tab === 'engines'" class="card">
+      <div style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:16px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <b>外部引擎依赖</b>
+          <span class="tag">按需安装</span>
+          <span style="flex:1"></span>
+          <button class="btn sm primary" :disabled="setup.running || !setup.cli_supported" @click="startSetup('cli')">安装命令行引擎</button>
+          <button class="btn sm" :disabled="setup.running" @click="startSetup('python')">安装 Python 引擎</button>
+          <button class="btn sm" :disabled="setup.running" @click="startSetup('all')">全部安装</button>
+        </div>
+        <p class="mut" style="margin:6px 0 0;font-size:12px">
+          点按钮会在本机运行项目自带的安装器（<code>scripts/engines-setup.mjs</code>）联网拉依赖：命令行引擎 = JDK + Go + Maven 现场编译 godlp / sensitive-word（约 500MB~1GB）；
+          Python 引擎 = pip 依赖 + GLiNER / OPF 模型（数 GB）。已装好的部分自动跳过，重复点不会重下。
+          原文与模型都只在这台机器上。
+        </p>
+        <p v-if="!setup.cli_supported" class="mut" style="margin:6px 0 0;font-size:12px">
+          当前平台（{{ setup.platform || '未知' }}）不会自动构建命令行引擎：macOS 目前只支持安装 Python 引擎；godlp / sensitive-word 需要自行准备 JDK/Go/Maven 后在卡片里改命令。
+        </p>
+        <p class="mut" style="margin:4px 0 0;font-size:12px">
+          Docker：安装结果在容器内部，<b>容器重建会丢</b>；要保留请把 <code>vendor/</code>、<code>python/vendor</code>、<code>python/models</code> 挂成宿主机卷（部署说明里有示例）。已经是 v0.4.1+ 镜像时，godlp 与 sensitive-word 已内置，无需再装。
+        </p>
+        <div v-if="setup.running || setup.lines.length" style="margin-top:10px">
+          <p style="margin:0 0 6px;font-size:12.5px" :class="setup.running ? '' : (setup.ok ? 'mut' : 'err')">
+            <template v-if="setup.running">安装中（{{ setup.scope }}）… 已用 {{ setupElapsed }}</template>
+            <template v-else-if="setup.ok">上次安装成功（{{ setup.scope }}，用时 {{ setupElapsed }}）</template>
+            <template v-else>上次安装失败：{{ setup.error }}（退出码 {{ setup.exit_code }}）</template>
+            <span v-if="setup.log_file" class="mut"> · 日志 {{ setup.log_file }}</span>
+          </p>
+          <pre style="margin:0;padding:8px 10px;max-height:220px;overflow:auto;background:rgba(127,127,127,.08);border-radius:6px;font-size:11.5px;line-height:1.45;white-space:pre-wrap">{{ setup.lines.join('\n') }}</pre>
+        </div>
+      </div>
+
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
         <b>工作模式</b>
         <button class="btn sm" :class="{ primary: eng.config.mode === 'primary' }" @click="engSetMode('primary')">主引擎（单选）</button>
