@@ -70,7 +70,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
 
-## 功能（v0.4.2）
+## 功能（v0.4.3）
 
 | 菜单 | 说明 |
 |---|---|
@@ -114,14 +114,16 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **首次启动自动装配**：`npm start` / `启动.cmd` 会先跑安装器——把 Python 依赖装进 `python/vendor/`、模型预取到 `python/models/`、JDK/Go/Maven 解压到 `vendor/`、编译 godlp CLI 与 sensitive-word jar。检查是幂等的：装好后每次启动只做存在性检查，秒过且完全离线。装配失败不拦主服务，缺哪个引擎就在探测页如实报哪个。
 
-**网页里一键装依赖（v0.4.2）**：设置 → 引擎 → **外部引擎依赖**，三个按钮：
+**网页里一键装依赖（v0.4.2 起，v0.4.3 修跨设备搬家）**：设置 → 引擎 → **外部引擎依赖**，三个按钮：
 - **安装命令行引擎**：下载 JDK + Go + Maven，现场编译 godlp 与 sensitive-word（约 500MB~1GB，通常 5~15 分钟）；
 - **安装 Python 引擎**：pip 依赖 + GLiNER/OPF 模型（数 GB）；
 - **全部安装**：两者都装。
 
 点下去后日志实时显示（同时写 `Logs/engines-setup-<时间戳>.log`），同一时刻只允许一个安装任务（再点回 409）。Docker 镜像默认 `MASK_NO_SETUP=1`，这个按钮就是为「不想重建镜像、但要用命令行引擎」准备的；安装结果在容器内，重建会丢（持久化卷配置见上文「三端分发包」）。安装器本体在 `server/services/enginesInstaller.js`（放在 `server/` 下才能随在线升级包一起升上去），`scripts/engines-setup.mjs` 与 `npm run setup:engines` 只是命令行入口，参数一致。
 
-平台边界（如实说）：Windows x64 与 Linux x64/arm64 会自动下载并构建命令行引擎；macOS 目前只装 Python 引擎。Linux 构建已按 Docker 的目录布局在本机等价复跑（godlp 静态 ELF、sensitive-word jar），但**开发机没有 Docker，未在真容器里跑完整按钮流程**。
+平台边界（如实说）：Windows x64 与 Linux x64/arm64 会自动下载并构建命令行引擎；macOS 目前只装 Python 引擎。Linux 构建已按 Docker 的目录布局在本机等价复跑（godlp 静态 ELF、sensitive-word jar）。
+
+**v0.4.3 修了两个只在生产真装时才暴露的问题**：①解出的 JDK/Go/Maven 被搬到项目根（`/app/jdk`）而不是 `vendor/` 下，装完永远探测不到——这是 v0.3.2 起就存在、本机因 `vendor/` 早已存在而从未走到的分支；②Docker 里把 `vendor/` 挂成宿主机卷时，从镜像层 `rename` 到挂载卷会 `EXDEV: cross-device link`，现在自动退回复制，挂载点本身删不掉时改为清空内容。另外下载请求补了 User-Agent（Adoptium 对无 UA 请求回 403），Linux JDK 多一个清华镜像兜底。**开发机仍没有 Docker，修复后没有在真容器里把整个按钮流程重跑一遍**——生产那次的实测证据只到「JDK 下载成功、搬移报 EXDEV」。
 
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
@@ -167,7 +169,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 61 + ssl 16 + engines 45 + setup 18 = 373 项
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 61 + ssl 16 + engines 45 + setup 21 = 376 项
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 

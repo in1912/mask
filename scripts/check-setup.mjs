@@ -4,9 +4,12 @@
 //       进度与日志采集 / 成功与失败退出码 / 结束后可再次触发 / 日志落盘 / 真实脚本参数校验
 // 用 MASK_ENGINES_SETUP_SCRIPT 把安装器换成临时 mock——自检绝不联网下载 GB 级依赖。
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
+const require = createRequire(import.meta.url);
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PORT = 9931;
@@ -131,6 +134,38 @@ try {
   const badScope = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'engines-setup.mjs'), '--only=bogus'], { encoding: 'utf8' });
   ok('T1 --only 非法值退出码 2', badScope.status === 2, `status=${badScope.status} ${badScope.stderr || ''}`);
   ok('T2 非法值不产生任何写入（未开始下载）', !/下载/.test((badScope.stdout || '') + (badScope.stderr || '')));
+
+  console.log('U. 解包目录搬移（v0.4.3 生产 EXDEV 事故回归）');
+  const { _moveInnerDir, _vendorTargets } = require(path.join(ROOT, 'server', 'services', 'enginesInstaller.js'));
+  ok('U1 目标目录都在 vendor/ 下（不能拼到项目根）',
+    Object.values(_vendorTargets).every((d) => path.dirname(d) === path.join(ROOT, 'vendor')),
+    JSON.stringify(_vendorTargets));
+
+  const mkTmp = () => {
+    const t = mkdtempSync(path.join(tmpdir(), 'mask-move-'));
+    mkdirSync(path.join(t, 'inner', 'bin'), { recursive: true });
+    writeFileSync(path.join(t, 'inner', 'bin', 'java'), 'x', 'utf8');
+    return t;
+  };
+  const t1 = mkTmp();
+  const d1 = path.join(mkdtempSync(path.join(tmpdir(), 'mask-dest-')), 'jdk');
+  try {
+    _moveInnerDir(t1, d1);
+    ok('U2 解出的单一目录被搬到目标路径', existsSync(path.join(d1, 'bin', 'java')) && !existsSync(t1));
+  } finally { rmSync(t1, { recursive: true, force: true }); rmSync(path.dirname(d1), { recursive: true, force: true }); }
+
+  // 强制走复制分支：模拟 Docker 里 vendor 被挂载、跨设备 rename 报 EXDEV
+  const t2 = mkTmp();
+  const d2 = path.join(mkdtempSync(path.join(tmpdir(), 'mask-dest2-')), 'go');
+  const prev = process.env.MASK_TEST_FORCE_EXDEV;
+  process.env.MASK_TEST_FORCE_EXDEV = '1';
+  try {
+    _moveInnerDir(t2, d2);
+    ok('U3 跨设备时退回复制且源目录已清掉', existsSync(path.join(d2, 'bin', 'java')) && !existsSync(t2));
+  } finally {
+    if (prev === undefined) delete process.env.MASK_TEST_FORCE_EXDEV; else process.env.MASK_TEST_FORCE_EXDEV = prev;
+    rmSync(t2, { recursive: true, force: true }); rmSync(path.dirname(d2), { recursive: true, force: true });
+  }
 } finally {
   child.kill();
   await sleep(300);

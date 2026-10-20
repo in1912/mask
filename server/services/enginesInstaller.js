@@ -53,13 +53,18 @@ function runOut(cmd, args, opts = {}) {
   return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
 }
 
-// 同步下载（用系统 Python 的 urllib，Node 侧无需额外依赖），按顺序试镜像
+// 同步下载（用系统 Python 的 urllib，Node 侧无需额外依赖），按顺序试镜像。
+// 一定要带 User-Agent：Adoptium API 对无 UA 的请求会直接 403（生产 v0.4.2 实测）。
+const DL_PY = 'import sys,urllib.request,shutil;'
+  + 'req=urllib.request.Request(sys.argv[1],headers={"User-Agent":"Mozilla/5.0 (compatible; mask-engines-setup/1.0)"});'
+  + 'r=urllib.request.urlopen(req,timeout=120);f=open(sys.argv[2],"wb");shutil.copyfileobj(r,f);f.close();r.close()';
+
 function downloadWithFallback(urls, dest) {
   rmSync(dest, { force: true });
   for (const u of urls) {
     try {
       log(`下载 ${u}`);
-      run(PY, ['-c', 'import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])', u, dest]);
+      run(PY, ['-c', DL_PY, u, dest]);
       if (existsSync(dest) && statSync(dest).size > 1024) return;
       die('下载结果为空');
     } catch (e) {
@@ -86,11 +91,48 @@ function extractArchive(archive, dest) {
   }
 }
 
-function moveInnerDir(tmp, finalName) {
+// 目标目录可能是 Docker 挂载点（./vendor/jdk:/app/vendor/jdk），挂载点本身删不掉（EBUSY），
+// 那就清空里面的内容——效果一样，且不会把宿主机卷弄坏。
+function emptyDirOrRemove(dest) {
+  if (!existsSync(dest)) return;
+  try {
+    rmSync(dest, { recursive: true, force: true });
+  } catch (e) {
+    log(`目标 ${dest} 删不掉（多半是挂载点，${e.code || e.message}），改为清空内容`);
+    for (const n of readdirSync(dest)) rmSync(path.join(dest, n), { recursive: true, force: true });
+  }
+}
+
+// rename 只在同一文件系统内有效：/app/vendor 常被挂成宿主机卷，而解压临时目录可能在镜像层，
+// 跨设备 rename 直接 EXDEV（生产 v0.4.2 实测）。这里退回整目录复制，复制完再删源。
+// MASK_TEST_FORCE_EXDEV=1 让自检能稳定走到复制分支（真实跨设备环境不好造）。
+function moveTree(src, dest) {
+  if (process.env.MASK_TEST_FORCE_EXDEV === '1') {
+    fs.cpSync(src, dest, { recursive: true });
+    return;
+  }
+  try {
+    renameSync(src, dest);
+  } catch (e) {
+    if (e.code !== 'EXDEV') throw e;
+    log(`跨设备 rename 不行（${src} → ${dest}），改用复制`);
+    fs.cpSync(src, dest, { recursive: true });
+  }
+}
+
+// destAbs 必须是完整绝对路径（vendor/jdk、vendor/go、vendor/maven）——
+// v0.3.2~v0.4.2 曾把只给名字的目标拼到项目根（解到 /app/jdk），生产第一次真装才炸。
+const VENDOR_TARGETS = {
+  jdk: P('vendor', 'jdk'),
+  go: P('vendor', 'go'),
+  maven: P('vendor', 'maven'),
+};
+
+function moveInnerDir(tmp, destAbs) {
   const items = readdirSync(tmp).filter((n) => statSync(path.join(tmp, n)).isDirectory());
   if (items.length !== 1) die(`${tmp} 里不是单一目录：${items.join(',')}`);
-  rmSync(P(finalName), { recursive: true, force: true });
-  renameSync(path.join(tmp, items[0]), P(finalName));
+  emptyDirOrRemove(destAbs);
+  moveTree(path.join(tmp, items[0]), destAbs);
   rmSync(tmp, { recursive: true, force: true });
 }
 
@@ -180,11 +222,12 @@ function ensureJdk() {
       ? ['https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.zip',
         'https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse']
       : ['https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse',
-        'https://mirrors.huaweicloud.com/openjdk/21.0.2/openjdk-21.0.2_linux-x64_bin.tar.gz'];
+        'https://mirrors.huaweicloud.com/openjdk/21.0.2/openjdk-21.0.2_linux-x64_bin.tar.gz',
+        'https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/linux/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz'];
     downloadWithFallback(urlsForJdk(urls), zip);
   }
   extractArchive(zip, P('vendor', 'tmp-jdk'));
-  moveInnerDir(P('vendor', 'tmp-jdk'), 'jdk');
+  moveInnerDir(P('vendor', 'tmp-jdk'), VENDOR_TARGETS.jdk);
   BUILD_JAVA_HOME = P('vendor', 'jdk');
   log('JDK：已解压到 vendor/jdk');
 }
@@ -203,7 +246,7 @@ function ensureGo() {
     downloadWithFallback(urls, zip);
   }
   extractArchive(zip, P('vendor', 'tmp-go'));
-  moveInnerDir(P('vendor', 'tmp-go'), 'go');
+  moveInnerDir(P('vendor', 'tmp-go'), VENDOR_TARGETS.go);
   log('Go：已解压到 vendor/go');
 }
 
@@ -219,14 +262,22 @@ function ensureMaven() {
     downloadWithFallback(urls, zip);
   }
   extractArchive(zip, P('vendor', 'tmp-maven'));
-  moveInnerDir(P('vendor', 'tmp-maven'), 'maven');
+  moveInnerDir(P('vendor', 'tmp-maven'), VENDOR_TARGETS.maven);
   log('Maven：已解压到 vendor/maven');
 }
 
 // ---------- 6. sensitive-word CLI ----------
+// 构建源码必须在镜像里。如果整个 vendor/ 被挂成宿主机空目录，镜像内的源码会被盖掉，
+// 报错要说清是挂载方式的问题，别让用户对着 mvn/go 的「找不到 pom.xml」干瞪眼。
+const VENDOR_MOUNT_HINT = '——多半是把整个 vendor/ 挂成了宿主机卷，镜像里的构建源码被盖掉了。'
+  + '请只挂输出子目录（vendor/jdk、vendor/go、vendor/maven、vendor/godlp、vendor/sensitive-word），见 docker-compose.yml。';
+
 function ensureSensitiveWord() {
   const jar = P('vendor', 'sensitive-word', 'sensitive-word-cli.jar');
   if (existsSync(jar) && !FORCE) { log('sensitive-word：已就绪'); return; }
+  if (!existsSync(P('vendor', 'sensitive-word-workspace', 'pom.xml'))) {
+    die(`找不到 vendor/sensitive-word-workspace/pom.xml${VENDOR_MOUNT_HINT}`);
+  }
   mkdirSync(path.dirname(jar), { recursive: true });
   run(P('vendor', 'maven', 'bin', IS_WIN ? 'mvn.cmd' : 'mvn'), ['-B', '-q',
     `-Dmaven.repo.local=${P('vendor', 'maven-repo')}`, 'package'],
@@ -240,6 +291,9 @@ function ensureSensitiveWord() {
 function ensureGodlp() {
   const exe = P('vendor', 'godlp', `godlp-cli${EXE}`);
   if (existsSync(exe) && !FORCE) { log('godlp：已就绪'); return; }
+  if (!existsSync(P('vendor', 'godlp-cli', 'go.mod'))) {
+    die(`找不到 vendor/godlp-cli/go.mod${VENDOR_MOUNT_HINT}`);
+  }
   // 容器里没有 gcc：必须静态编译（CGO_ENABLED=0），否则 build 会卡在 gcc 缺失
   const env = { ...process.env, GOPROXY: 'https://goproxy.cn,direct', GOSUMDB: 'off', GO111MODULE: 'on', CGO_ENABLED: '0' };
   const go = P('vendor', 'go', 'bin', `go${EXE}`);
@@ -302,4 +356,5 @@ function runCli(argv = process.argv.slice(2)) {
 
 if (require.main === module) process.exit(runCli(process.argv.slice(2)));
 
-module.exports = { runCli, main };
+// _moveInnerDir 只给自检用（验证目标目录正确、EXDEV 复制分支可用）
+module.exports = { runCli, main, _moveInnerDir: moveInnerDir, _vendorTargets: VENDOR_TARGETS };
