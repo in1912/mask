@@ -1,5 +1,5 @@
 'use strict';
-// 外部脱敏引擎装配器（v0.4.8）：首次启动安装，之后只做存在性检查 + 真跑一次验证。
+// 外部脱敏引擎装配器（v0.4.9）：首次启动安装，之后只做存在性检查 + 真跑一次验证。
 //
 // 为什么放在 server/ 下而不是 scripts/：在线升级白名单只允许 server/**.js、web/dist、package.json，
 // 装在 scripts/ 的安装器进不了升级包——生产上点了按钮也只会跑旧脚本。放在 server/ 里升级就能带过去。
@@ -257,7 +257,7 @@ function moveInnerDir(tmp, destAbs) {
 }
 
 // ---------- 1. Python 依赖 ----------
-const PY_MODULES = ['presidio_analyzer', 'spacy', 'gliner', 'torch', 'argus_redact', 'scrubadub', 'opf', 'tiktoken', 'sentencepiece'];
+const PY_MODULES = ['presidio_analyzer', 'spacy', 'gliner', 'torch', 'argus_redact', 'scrubadub', 'opf', 'tiktoken', 'sentencepiece', 'huggingface_hub'];
 function pythonReady() {
   const code = `import importlib.util as u,sys; sys.path.insert(0, r'${P('python', 'vendor')}'); ` +
     `mods=${JSON.stringify(PY_MODULES)}; missing=[m for m in mods if u.find_spec(m) is None]; ` +
@@ -287,7 +287,7 @@ function ensurePython() {
   if (!st.ok) log(`Python 引擎依赖：缺 ${st.missing || st.why}`);
   pipInstall(['--target', P('python', 'vendor'), '--upgrade', '--no-warn-script-location',
     'presidio-analyzer', 'presidio-anonymizer', 'spacy', 'gliner', 'argus-redact', 'scrubadub',
-    'sentencepiece', 'protobuf']);
+    'sentencepiece', 'protobuf', 'huggingface_hub']);
   pipInstall(['--target', P('python', 'vendor'), '--upgrade', '--no-deps',
     P('vendor', 'engines-src', 'privacy-filter')]);
   pipInstall(['--target', P('python', 'vendor'), '--upgrade', 'tiktoken']);
@@ -298,7 +298,10 @@ function ensureModels() {
   const gliner = P('python', 'models', 'gliner_multi_pii-v1', 'pytorch_model.bin');
   const opf = P('python', 'models', 'opf', 'config.json');
   if (existsSync(gliner) && existsSync(opf)) { log('模型：GLiNER + OpenAI Privacy Filter 已就绪'); return; }
-  run(PY, [P('python', 'fetch_models.py')], { env: { ...process.env, MASK_MODELS_DIR: P('python', 'models') } });
+  // PYTHONPATH 也带上：脚本自己已经插了 sys.path，这里是第二道保险
+  run(PY, [P('python', 'fetch_models.py')], {
+    env: { ...process.env, MASK_MODELS_DIR: P('python', 'models'), PYTHONPATH: [P('python', 'vendor'), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) },
+  });
 }
 
 // ---------- 3. JDK ----------
@@ -688,28 +691,45 @@ function main() {
   mkdirSync(P('python', 'vendor'), { recursive: true });
   mkdirSync(P('python', 'models'), { recursive: true });
 
-  if (ONLY !== 'cli') {
-    log('── Python 引擎依赖与模型');
-    ensurePython();
-    ensureModels();
-  }
+  // v0.4.9：两类引擎互不连坐。以前 Python 侧一个导入失败就整轮 exit 1，
+  // 排在后面的命令行引擎根本没机会装；现在各自 try，全部跑完再一次性报哪些没装上。
+  const failures = [];
+  const attempt = (label, fn) => {
+    try { return fn(); } catch (e) {
+      failures.push(`${label}：${e.message}`);
+      log(`失败：${label} —— ${e.message}`);
+      return null;
+    }
+  };
+
+  // 命令行引擎先装：体积小、装得快，失败也最可能是环境问题（早点暴露）
   if (ONLY !== 'python') {
     log('── 命令行引擎（godlp / sensitive-word）');
     if (CLI_SUPPORTED) {
-      ensureSources();
-      ensureJdk();
-      ensureGo();
-      ensureMaven();
-      ensureSensitiveWord();
-      ensureGodlp();
+      attempt('构建源码', ensureSources);
+      attempt('JDK', ensureJdk);
+      attempt('Go', ensureGo);
+      attempt('Maven', ensureMaven);
+      attempt('sensitive-word', ensureSensitiveWord);
+      attempt('godlp', ensureGodlp);
     }
+  }
+  if (ONLY !== 'cli') {
+    log('── Python 引擎依赖与模型');
+    attempt('Python 依赖', ensurePython);
+    attempt('模型预取', ensureModels);
   }
 
   const ready = {
     ready_at: new Date().toISOString(), platform: process.platform, arch: ARCH, scope: ONLY,
     engines_home: ENGINES_HOME,
     python: P('python', 'vendor'), models: P('python', 'models'),
+    failed: failures,
   };
+  // 有失败就不写「就绪」标点：下次启动还会重试；失败原因也写进日志，不装没看见
+  if (failures.length) {
+    die(`以下部分没装上（其余照常可用，设置 → 引擎里会如实显示）：\n  - ${failures.join('\n  - ')}`);
+  }
   writeFileSync(P('vendor', '.engines-ready.json'), JSON.stringify(ready, null, 2));
   // 降级时运行时目录自己也留一份：容器重建后 vendor 卷还在、.engines 没了，一眼能看出来
   if (ENGINES_HOME !== VENDOR) writeFileSync(path.join(ENGINES_HOME, '.engines-ready.json'), JSON.stringify(ready, null, 2));

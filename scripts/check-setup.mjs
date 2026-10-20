@@ -387,6 +387,24 @@ try {
     });
     ok('Y4 数据目录不能执行时才退到备选目录', d.h === fbY, JSON.stringify(d));
   } finally { rmSync(yt, { recursive: true, force: true }); }
+
+  console.log('Z. 模型预取依赖（生产 `No module named huggingface_hub` 事故回归）');
+  {
+    const fm = path.join(ROOT, 'python', 'fetch_models.py');
+    const src = readFileSync(fm, 'utf8');
+    // 依赖装在 python/vendor（pip --target），不插 sys.path 的话容器里必然导入失败
+    ok('Z1 fetch_models.py 自己把 python/vendor 加进 sys.path',
+      /_VENDOR[\s\S]{0,300}sys\.path\.insert/.test(src));
+    const py = process.env.MASK_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+    if (existsSync(path.join(ROOT, 'python', 'vendor', 'huggingface_hub'))) {
+      // -I：隔离模式，连 PYTHONPATH 都不看——模拟容器里没装全局包的情形
+      const r = spawnSync(py, ['-I', fm, '--check-deps'], { encoding: 'utf8', cwd: ROOT });
+      ok('Z2 隔离环境也能导入 huggingface_hub', r.status === 0,
+        (r.stderr || r.stdout || '').trim().slice(-200));
+    } else {
+      console.log('  · 跳过 Z2（本机 python/vendor 未装 huggingface_hub，无法验证导入）');
+    }
+  }
 } finally {
   child.kill();
   await sleep(300);

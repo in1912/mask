@@ -70,7 +70,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
 
-## 功能（v0.4.8）
+## 功能（v0.4.9）
 
 | 菜单 | 说明 |
 |---|---|
@@ -133,7 +133,9 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **v0.4.8 修「共享卷上文件是 0000」**：飞牛（fnOS）这类共享卷把文件的 mode 报成 `0000`——不是「没有执行位」，而是**连读都不行**。只补执行位的做法在这里会绕过问题：`chmod a+rwX` 对 0000 的文件也只加 rw 不加 x，而 JDK 的 `lib/*`、Go 的源码、sensitive-word 的 pom 全都是 0000，`java` 自己都打不开自己的库。现在安装器在复制/解压之后先把整棵树抬到「至少 目录 0755 / 文件 0644」，再按布局补执行位；**只加不减**，正常机器上一个字节都不动。同一套处理用在缓存压缩包（解压前先补读权限）、内置源码铺开、sensitive-word 工作区复制上。另外 `MASK_ENGINES_HOME` 指到容器里不存在的路径时，报错直接给出可用的路径（容器数据目录是 `$MASK_DATA_DIR`，一般是 `/app/data`，`/data/engines` 只有在 `/data` 真的挂了卷时才存在）。
 
-**开发机仍没有 Docker，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位、在本机用等价的目录布局与强制降级开关复现**：`check-setup` 的 W 段覆盖「探测可执行 → 降级目录 → 标点文件 → 引擎默认命令跟着换 → 标点文件写坏退回 vendor」，X 段覆盖「复制丢执行位 → 补 0755 → 真跑验证」（X1 复现「复制后 mvn 跑不了」，X3 补位后能跑，X4 只动该动的文件）。**X3/X4 只在 POSIX 上有意义，开发机是 Windows，本机实测的只有 Windows 分支（chmod 空操作）**，Linux 分支靠线上验证。真容器里的完整按钮流程仍未实跑。
+**v0.4.9 修「模型预取找不到 huggingface_hub」**：生产点「全部安装」时 pip 全部成功，最后一步 `fetch_models.py` 却 `ModuleNotFoundError: No module named 'huggingface_hub'`。依赖是 `pip --target python/vendor` 装的，而这个脚本从来没把 `python/vendor` 插进 `sys.path`（`sidecar.py` 插了，所以边车一直没事）；本机因为有模型目录、`ensureModels` 直接跳过，这行代码从没被执行过。三处一起修：①`fetch_models.py` 自己插 `sys.path`（并加 `--check-deps` 供自检）；②安装器给子进程带上 `PYTHONPATH=python/vendor`；③`huggingface_hub` 显式进 pip 清单与就绪检查，不再指望它被别的包捎带装上。顺带改了失败处理：**命令行引擎与 Python 引擎互不连坐**——以前 Python 侧一失败整轮 `exit 1`，排在后面的 CLI 引擎根本没机会装；现在各自 try、全部跑完再一次性列出「哪些没装上」，有失败就不写「就绪」标点（下次启动重试）。
+
+**开发机仍没有 Docker，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位、在本机用等价的目录布局与强制降级开关复现**：`check-setup` 的 W 段覆盖「探测可执行 → 降级目录 → 标点文件 → 引擎默认命令跟着换 → 标点文件写坏退回 vendor」，X 段覆盖「复制丢执行位 → 补 0755 → 真跑验证」（X1 复现「复制后 mvn 跑不了」，X3 补位后能跑，X4 只动该动的文件）。**X3/X4 只在 POSIX 上有意义，开发机是 Windows，本机实测的只有 Windows 分支（chmod 空操作）**，Linux 分支靠线上验证。真容器里的完整按钮流程仍未实跑。
 
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
@@ -179,7 +181,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 44 = 401 项（Windows 上 X3/X4/X10/X11 四条只测 POSIX，Linux 跑 48）
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 46 = 403 项（Windows 上 X3/X4/X10/X11 四条只测 POSIX，Linux 跑 50）
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 

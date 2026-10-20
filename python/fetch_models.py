@@ -15,12 +15,23 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# 依赖是用 pip --target 装在 python/vendor 里的，不在系统 site-packages：
+# 不显式加进 sys.path，`import huggingface_hub` 必然 ModuleNotFoundError
+# （生产 v0.4.8 就是这么炸的——本机因为有模型、ensureModels 直接跳过，一直没走到这里）
+_VENDOR = str(HERE / "vendor")
+if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
+    sys.path.insert(0, _VENDOR)
 MODELS = Path(os.environ.get("MASK_MODELS_DIR") or (HERE / "models"))
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HOME", str(MODELS / "hf"))
 
 from huggingface_hub import hf_hub_download, snapshot_download  # noqa: E402  (必须先设环境变量)
+
+if "--check-deps" in sys.argv:  # 自检用：只验证依赖能导入，不下载任何东西
+    import huggingface_hub
+    print(f"[models] huggingface_hub {huggingface_hub.__version__} @ {_VENDOR}")
+    raise SystemExit(0)
 
 
 def ensure_gliner() -> bool:
