@@ -28,8 +28,10 @@ services:
       # - ./vendor/godlp:/app/vendor/godlp
       # - ./vendor/sensitive-word:/app/vendor/sensitive-word
       # vendor 挂在不允许执行程序的盘上（noexec / 共享盘）时，安装器会把 JDK/Go/Maven
-      # 与 godlp-cli 放到 /app/.engines；想让它活过容器重建就单独挂这个目录
-      # （同样别挂在 noexec 的共享盘上，否则问题照旧）：
-      # - ./.engines:/app/.engines
-      # 也可以直接指定别处：environment 里加 MASK_ENGINES_HOME=/data/engines
-      # （v0.4.6 起从宿主机卷复制来的程序会自动补回执行位，装完真跑一次才报就绪）
+      # 与 godlp-cli 改放别处，按顺序挑：MASK_ENGINES_HOME → /app/data/engines（数据卷，
+      # 容器重建不丢）→ /app/.engines（镜像层，重建要重装）→ 系统临时目录。
+      # v0.4.6 起从宿主机卷复制来的程序会自动补回执行位，装完真跑一次 java/go/mvn 才报就绪。
+      # 想手工指定就设这个环境变量（必须指向能执行程序的普通磁盘目录）：
+      #   MASK_ENGINES_HOME: /app/data/engines
+      # ⚠️ 指到容器根目录下没挂卷的路径（例如 /data/engines 而 /data 不是卷）照样能装，
+      #    但容器重建就没了；安装日志会提示「在容器镜像层」。

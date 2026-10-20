@@ -314,6 +314,51 @@ try {
     ok('X7 解压临时目录在运行时目录下且按工具链分目录',
       path.basename(h) === '.tmp-maven' && h.startsWith(require(installerPath)._enginesHome() + path.sep), h);
   } finally { rmSync(xt, { recursive: true, force: true }); }
+
+  console.log('Y. 运行时目录优先级（生产 compose 加 MASK_ENGINES_HOME=/data/engines 的场景）');
+  // 单独起子进程：这些环境变量在 require 那一刻就被读进模块常量，同一进程里改不生效
+  const homeRun = (env) => {
+    const r = spawnSync(process.execPath, ['-e', `
+      const m = require(${JSON.stringify(installerPath)});
+      const h = m._resolveEnginesHome();
+      console.log(JSON.stringify({ h, data: m._dataDir() }));
+    `], {
+      encoding: 'utf8', cwd: ROOT,
+      env: { ...process.env, MASK_ENGINES_HOME: '', MASK_ENGINES_MARKER: '', MASK_TEST_VENDOR_NOEXEC: '', MASK_TEST_ENGINES_FALLBACK: '', MASK_TEST_NOEXEC_DIRS: '', ...env },
+    });
+    const line = (r.stdout || '').trim().split(/\r?\n/).pop() || '';
+    let j = {};
+    try { j = JSON.parse(line); } catch { j = { parse_error: line }; }
+    return { ...j, status: r.status, err: (r.stderr || '').slice(-300), out: r.stdout || '' };
+  };
+
+  const yt = mkdtempSync(path.join(tmpdir(), 'mask-y-'));
+  try {
+    // Y1：显式指定就用它，并且目录要真的建出来
+    const yh = path.join(yt, 'engines');
+    const a = homeRun({ MASK_ENGINES_HOME: yh });
+    ok('Y1 MASK_ENGINES_HOME 指定的目录优先且被创建',
+      a.h === yh && existsSync(yh), JSON.stringify(a));
+
+    // Y2：显式指定的目录不能执行 → 立刻失败，不装一半（生产最容易踩：指到 noexec 盘）
+    const b = homeRun({ MASK_ENGINES_HOME: path.join(yt, 'noexec'), MASK_TEST_NOEXEC_DIRS: path.join(yt, 'noexec') });
+    ok('Y2 指定的目录不能执行时直接报错退出',
+      b.status !== 0 && /MASK_ENGINES_HOME/.test(b.err + b.out), `status=${b.status} ${b.err.slice(-160)}`);
+
+    // Y3：没显式指定、vendor 又不能执行 → 先放数据目录（挂出来的卷），容器重建不丢
+    const dataRoot = path.join(yt, 'data');
+    const c = homeRun({ MASK_TEST_VENDOR_NOEXEC: '1', MASK_DATA_DIR: dataRoot });
+    ok('Y3 自动降级时优先放数据卷里的 engines/',
+      c.h === path.join(dataRoot, 'engines'), JSON.stringify(c));
+
+    // Y4：数据目录也不能执行 → 才退到项目内 .engines / 临时目录
+    const fbY = path.join(yt, 'fallback');
+    const d = homeRun({
+      MASK_TEST_VENDOR_NOEXEC: '1', MASK_DATA_DIR: dataRoot,
+      MASK_TEST_NOEXEC_DIRS: path.join(dataRoot, 'engines'), MASK_TEST_ENGINES_FALLBACK: fbY,
+    });
+    ok('Y4 数据目录不能执行时才退到备选目录', d.h === fbY, JSON.stringify(d));
+  } finally { rmSync(yt, { recursive: true, force: true }); }
 } finally {
   child.kill();
   await sleep(300);

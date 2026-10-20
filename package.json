@@ -1,6 +1,6 @@
 {
   "name": "mask",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "private": true,
   "description": "面具 · AI 脱敏系统",
   "engines": {

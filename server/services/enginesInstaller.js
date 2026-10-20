@@ -1,5 +1,5 @@
 'use strict';
-// 外部脱敏引擎装配器（v0.4.6）：首次启动安装，之后只做存在性检查 + 真跑一次验证。
+// 外部脱敏引擎装配器（v0.4.7）：首次启动安装，之后只做存在性检查 + 真跑一次验证。
 //
 // 为什么放在 server/ 下而不是 scripts/：在线升级白名单只允许 server/**.js、web/dist、package.json，
 // 装在 scripts/ 的安装器进不了升级包——生产上点了按钮也只会跑旧脚本。放在 server/ 里升级就能带过去。
@@ -42,10 +42,12 @@ const EXE = IS_WIN ? '.exe' : '';
 const CLI_SUPPORTED = IS_WIN || IS_LINUX;
 
 const VENDOR = P('vendor');
-// vendor 挂载点不能执行时，运行时放这里（MASK_TEST_ENGINES_FALLBACK 只给自检用，避免动项目里的真目录）
-const FALLBACK_HOME = process.env.MASK_TEST_ENGINES_FALLBACK
+// 数据目录（Docker 里是挂出来的卷）：vendor 不能执行时，可执行引擎优先放这里，容器重建不丢。
+const DATA_DIR = path.resolve(process.env.MASK_DATA_DIR || P('data'));
+// 自检用：把降级目标钉死到临时目录，避免动项目里的真目录
+const TEST_FALLBACK = process.env.MASK_TEST_ENGINES_FALLBACK
   ? path.resolve(process.env.MASK_TEST_ENGINES_FALLBACK)
-  : P('.engines');
+  : null;
 let ENGINES_HOME = VENDOR;          // main() 里探测后决定
 let VENDOR_TARGETS = {};            // jdk / go / maven，跟着 ENGINES_HOME
 
@@ -153,7 +155,11 @@ function vendorTargets(home) {
 // 文件在、可读、可写，就是不能执行。vendor 里的 java/go/godlp 也全都会栽在这里。
 // 探测方式：在目标目录写一个最小 shell 脚本（0755）并真跑一次；写不了或跑不起来都算不能用。
 // Windows 没有执行位/noexec 这回事，直接认为可用。
+const NOEXEC_TEST = (process.env.MASK_TEST_NOEXEC_DIRS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean).map((d) => path.resolve(d));
 function canExecIn(dir) {
+  // 自检用：把指定目录当成 noexec（本机造不出 noexec 挂载，Windows 更是没有执行位概念）
+  if (NOEXEC_TEST.some((d) => path.resolve(dir) === d)) return false;
   if (IS_WIN) return true;
   try {
     mkdirSync(dir, { recursive: true });
@@ -168,30 +174,66 @@ function canExecIn(dir) {
   }
 }
 
+// 容器里把引擎装在「镜像层」（根文件系统）时，容器一重建就没了。能查就查一下并如实说出来。
+function onImageLayer(dir) {
+  if (!IS_LINUX) return false;
+  try {
+    const points = fs.readFileSync('/proc/self/mounts', 'utf8').split('\n')
+      .map((l) => l.split(/\s+/)[1]).filter(Boolean)
+      .map((m) => m.replace(/\\040/g, ' '))
+      .filter((m) => dir === m || dir.startsWith(m.endsWith('/') ? m : `${m}/`));
+    if (!points.length) return false;
+    points.sort((a, b) => b.length - a.length);
+    return points[0] === '/';        // 最近的挂载点就是根 → 在镜像层
+  } catch { return false; }
+}
+
 function resolveEnginesHome() {
+  // 显式配置最高优先：说放哪就放哪，但必须真能执行——不能执行就地失败，不再硬着头皮装一半
   if (process.env.MASK_ENGINES_HOME) {
     const h = path.resolve(process.env.MASK_ENGINES_HOME);
     log(`引擎运行时目录：${h}（MASK_ENGINES_HOME 指定）`);
-    if (!canExecIn(h)) log(`注意：${h} 里的程序也不能执行，装完仍会 EACCES——请换一个普通磁盘目录`);
+    try { mkdirSync(h, { recursive: true }); } catch (e) {
+      die(`MASK_ENGINES_HOME=${h} 建不出来：${e.message}`);
+    }
+    if (!canExecIn(h)) {
+      die(`MASK_ENGINES_HOME=${h} 里的程序不能执行（noexec 挂载，或文件系统不存执行位）——`
+        + '换一个普通磁盘目录，比如 /app/data/engines（数据卷里，容器重建不丢）');
+    }
+    warnIfEphemeral(h);
     return h;
   }
   // MASK_TEST_VENDOR_NOEXEC=1 让自检能稳定走到降级分支（本机造不出 noexec 挂载）
   if (process.env.MASK_TEST_VENDOR_NOEXEC !== '1' && canExecIn(VENDOR)) return VENDOR;
   log('vendor/ 里的程序不能执行（常见原因：宿主机卷以 noexec 挂进来，或文件系统不存执行位）');
-  log(`可执行的部分（JDK/Go/Maven/godlp）改放到 ${FALLBACK_HOME}；jar 与源码留在 vendor/ 不影响使用。`);
+  log('可执行的部分（JDK/Go/Maven/godlp）改放到下面第一个能用的目录；jar 与源码留在 vendor/ 不影响使用。');
   log('vendor 里旧的同名目录不会再被使用，也不会自动删除（确认没用可手工删）。');
-  // 项目目录本身不可写时（例如容器以非 root 跑且 /app 只读）退到系统临时目录
-  for (const cand of [FALLBACK_HOME, path.join(os.tmpdir(), 'mask-engines')]) {
+  // 优先数据目录：Docker 里它就是挂出来的卷，容器重建不丢；再退项目内 .engines（镜像层），最后系统临时目录
+  const cands = [
+    ...(TEST_FALLBACK ? [TEST_FALLBACK] : []),
+    path.join(DATA_DIR, 'engines'),
+    P('.engines'),
+    path.join(os.tmpdir(), 'mask-engines'),
+  ];
+  for (const cand of cands) {
     try {
       mkdirSync(cand, { recursive: true });
       if (!canExecIn(cand)) { log(`${cand} 里的程序也不能执行，换下一个位置`); continue; }
-      if (cand !== FALLBACK_HOME) log(`项目目录写不进去，运行时改放 ${cand}（容器重建会丢，建议挂载或设 MASK_ENGINES_HOME）`);
+      log(`引擎运行时目录：${cand}`);
+      warnIfEphemeral(cand);
       return cand;
     } catch (e) {
       log(`${cand} 不可用：${e.message}`);
     }
   }
   die('找不到既能写又能执行程序的目录——请设 MASK_ENGINES_HOME 指向普通磁盘目录后重试');
+}
+
+function warnIfEphemeral(h) {
+  if (onImageLayer(h)) {
+    log(`注意：${h} 在容器镜像层（不是挂载卷），容器重建后要重装一次；`
+      + '想留住它就把数据目录挂成卷并用 MASK_ENGINES_HOME 指到卷里（如 /app/data/engines）。');
+  }
 }
 
 function moveInnerDir(tmp, destAbs) {
@@ -650,5 +692,6 @@ module.exports = {
   _resolveEnginesHome: resolveEnginesHome,
   _canExecIn: canExecIn,
   _chmodExecTree: chmodExecTree, _canRun: canRun, _tmpFor: tmpFor,
+  _onImageLayer: onImageLayer, _dataDir: () => DATA_DIR,
   _ensureSources: ensureSources, _sourcesReady: sourcesReady,
 };
