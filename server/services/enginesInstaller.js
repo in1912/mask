@@ -26,6 +26,9 @@ const {
   existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
 } = fs;
 
+const { extractZip } = require('./zipService');
+const EMBEDDED_SRC = require('./engineSources');
+
 const ROOT = path.resolve(__dirname, '..', '..');
 const P = (...x) => path.join(ROOT, ...x);
 const IS_WIN = process.platform === 'win32';
@@ -266,11 +269,43 @@ function ensureMaven() {
   log('Maven：已解压到 vendor/maven');
 }
 
+// ---------- 5.5 构建源码（镜像里没有时用内置副本铺开） ----------
+// 旧镜像没带这两个引擎的源码；把整个 vendor/ 挂成宿主机卷也会盖掉镜像里的源码。
+// 在线升级白名单带不了 vendor/，所以源码以 base64 zip 内置在 server/services/engineSources.js，
+// 这里只在缺失时铺文件（本地开发有源码就一个字节都不动）。
+const SOURCE_PROBES = [
+  ['godlp-cli', 'go.mod'],
+  ['engines-src', 'godlp', 'go.mod'],
+  ['sensitive-word-workspace', 'pom.xml'],
+];
+
+function sourcesReady(baseDir = P('vendor')) {
+  return SOURCE_PROBES.every((rel) => existsSync(path.join(baseDir, ...rel)));
+}
+
+function ensureSources(baseDir = P('vendor')) {
+  if (sourcesReady(baseDir)) { log('构建源码：已就绪'); return; }
+  log('镜像里缺构建源码（旧镜像或 vendor/ 被宿主机卷盖住），铺开内置源码副本…');
+  const buf = Buffer.from(EMBEDDED_SRC.zip_b64, 'base64');
+  const entries = extractZip(buf);
+  let wrote = 0;
+  for (const e of entries) {
+    if (!/^(godlp-cli|engines-src\/godlp|sensitive-word-workspace)\//.test(e.name) || e.name.split('/').includes('..')) {
+      die(`内置源码副本里有异常路径：${e.name}`);
+    }
+    const dst = path.join(baseDir, ...e.name.split('/'));
+    if (existsSync(dst)) continue; // 已有的文件不动（可能是用户改过的源码）
+    mkdirSync(path.dirname(dst), { recursive: true });
+    writeFileSync(dst, e.data);
+    wrote++;
+  }
+  log(`构建源码：铺开 ${wrote} 个文件到 ${baseDir}`);
+}
+
 // ---------- 6. sensitive-word CLI ----------
-// 构建源码必须在镜像里。如果整个 vendor/ 被挂成宿主机空目录，镜像内的源码会被盖掉，
-// 报错要说清是挂载方式的问题，别让用户对着 mvn/go 的「找不到 pom.xml」干瞪眼。
-const VENDOR_MOUNT_HINT = '——多半是把整个 vendor/ 挂成了宿主机卷，镜像里的构建源码被盖掉了。'
-  + '请只挂输出子目录（vendor/jdk、vendor/go、vendor/maven、vendor/godlp、vendor/sensitive-word），见 docker-compose.yml。';
+// 源码缺失时 ensureSources() 已经铺过；还缺说明 vendor/ 不可写，报错要说清。
+const VENDOR_MOUNT_HINT = '——内置源码副本也没能铺开，检查 vendor/ 是否可写（或把整个 vendor/ 挂成了只读卷）。'
+  + '实在不行就重建镜像（v0.4.1+ 镜像已内置两个命令行引擎），见 docker-compose.yml。';
 
 function ensureSensitiveWord() {
   const jar = P('vendor', 'sensitive-word', 'sensitive-word-cli.jar');
@@ -279,10 +314,24 @@ function ensureSensitiveWord() {
     die(`找不到 vendor/sensitive-word-workspace/pom.xml${VENDOR_MOUNT_HINT}`);
   }
   mkdirSync(path.dirname(jar), { recursive: true });
-  run(P('vendor', 'maven', 'bin', IS_WIN ? 'mvn.cmd' : 'mvn'), ['-B', '-q',
-    `-Dmaven.repo.local=${P('vendor', 'maven-repo')}`, 'package'],
-  { cwd: P('vendor', 'sensitive-word-workspace'), shell: IS_WIN,
-    env: { ...process.env, JAVA_HOME: BUILD_JAVA_HOME } });
+  const mvn = P('vendor', 'maven', 'bin', IS_WIN ? 'mvn.cmd' : 'mvn');
+  const args = ['-B', '-q', `-Dmaven.repo.local=${P('vendor', 'maven-repo')}`, 'package'];
+  const opts = { cwd: P('vendor', 'sensitive-word-workspace'), shell: IS_WIN,
+    env: { ...process.env, JAVA_HOME: BUILD_JAVA_HOME } };
+  try {
+    run(mvn, args, opts);
+  } catch (e) {
+    // 国内服务器直连 Maven Central 经常慢或断；阿里云镜像做兜底（与 Dockerfile 同源）
+    log(`默认 Maven 仓库失败，改用阿里云镜像重试：${e.message}`);
+    const settings = P('vendor', 'maven-aliyun-settings.xml');
+    writeFileSync(settings, [
+      '<settings><mirrors><mirror>',
+      '<id>aliyun</id><mirrorOf>central</mirrorOf>',
+      '<url>https://maven.aliyun.com/repository/central</url>',
+      '</mirror></mirrors></settings>',
+    ].join(''));
+    run(mvn, [...args, '-s', settings], opts);
+  }
   if (!existsSync(jar)) die('sensitive-word 构建完成但没找到 jar');
   log('sensitive-word：jar 已生成');
 }
@@ -320,6 +369,7 @@ function main() {
   if (ONLY !== 'python') {
     log('── 命令行引擎（godlp / sensitive-word）');
     if (CLI_SUPPORTED) {
+      ensureSources();
       ensureJdk();
       ensureGo();
       ensureMaven();
@@ -357,4 +407,7 @@ function runCli(argv = process.argv.slice(2)) {
 if (require.main === module) process.exit(runCli(process.argv.slice(2)));
 
 // _moveInnerDir 只给自检用（验证目标目录正确、EXDEV 复制分支可用）
-module.exports = { runCli, main, _moveInnerDir: moveInnerDir, _vendorTargets: VENDOR_TARGETS };
+module.exports = {
+  runCli, main, _moveInnerDir: moveInnerDir, _vendorTargets: VENDOR_TARGETS,
+  _ensureSources: ensureSources, _sourcesReady: sourcesReady,
+};

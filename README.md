@@ -70,7 +70,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
 
-## 功能（v0.4.3）
+## 功能（v0.4.4）
 
 | 菜单 | 说明 |
 |---|---|
@@ -123,7 +123,9 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 平台边界（如实说）：Windows x64 与 Linux x64/arm64 会自动下载并构建命令行引擎；macOS 目前只装 Python 引擎。Linux 构建已按 Docker 的目录布局在本机等价复跑（godlp 静态 ELF、sensitive-word jar）。
 
-**v0.4.3 修了两个只在生产真装时才暴露的问题**：①解出的 JDK/Go/Maven 被搬到项目根（`/app/jdk`）而不是 `vendor/` 下，装完永远探测不到——这是 v0.3.2 起就存在、本机因 `vendor/` 早已存在而从未走到的分支；②Docker 里把 `vendor/` 挂成宿主机卷时，从镜像层 `rename` 到挂载卷会 `EXDEV: cross-device link`，现在自动退回复制，挂载点本身删不掉时改为清空内容。另外，预检原先要求包内前端目录**严格比现役新**，纯服务端升级（前端没重构建、dist 同名）会被误判为「白升」拒收；v0.4.3 改为**允许相等、只拒绝更旧**，落盘时同名文件按内容跳过。另外，误传三端分发包（外面套着 `面具-<版本>-<平台>/` 目录）现在会被直接认出来，提示「这是分发包、升级请用 -upgrade.zip」，不再刷 148 条非 ASCII 报错。下载请求补了 User-Agent（Adoptium 对无 UA 请求回 403），Linux JDK 多一个清华镜像兜底。**开发机仍没有 Docker，修复后没有在真容器里把整个按钮流程重跑一遍**——生产那次的实测证据只到「JDK 下载成功、搬移报 EXDEV」。
+**v0.4.3 修了两个只在生产真装时才暴露的问题**：①解出的 JDK/Go/Maven 被搬到项目根（`/app/jdk`）而不是 `vendor/` 下，装完永远探测不到——这是 v0.3.2 起就存在、本机因 `vendor/` 早已存在而从未走到的分支；②Docker 里把 `vendor/` 挂成宿主机卷时，从镜像层 `rename` 到挂载卷会 `EXDEV: cross-device link`，现在自动退回复制，挂载点本身删不掉时改为清空内容。另外，预检原先要求包内前端目录**严格比现役新**，纯服务端升级（前端没重构建、dist 同名）会被误判为「白升」拒收；v0.4.3 改为**允许相等、只拒绝更旧**，落盘时同名文件按内容跳过。另外，误传三端分发包（外面套着 `面具-<版本>-<平台>/` 目录）现在会被直接认出来，提示「这是分发包、升级请用 -upgrade.zip」，不再刷 148 条非 ASCII 报错。下载请求补了 User-Agent（Adoptium 对无 UA 请求回 403），Linux JDK 多一个清华镜像兜底。**v0.4.4 让安装器不再依赖镜像里的源码**：旧镜像（或把整个 `vendor/` 挂成宿主机卷）里没有 `godlp-cli` / `sensitive-word-workspace`，按钮会卡在「找不到 pom.xml」。现在这两份源码（共 40 个文件、约 260KB）以 base64 zip 内置在 `server/services/engineSources.js`，安装器发现缺失时自动铺到 `vendor/` 下再构建；本地已有源码时一个字节都不动。源码改动后要重跑 `node scripts/build-engine-sources.mjs`，`check-setup` 的 V2 会比对两边是否一致，忘了重跑直接红。另外 Maven 直连失败时会自动改用阿里云镜像重试。
+
+**开发机仍没有 Docker，修复后没有在真容器里把整个按钮流程重跑一遍**——生产那次的实测证据只到「JDK 下载成功、搬移报 EXDEV」。
 
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
@@ -169,7 +171,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 21 = 378 项
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 25 = 382 项
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 

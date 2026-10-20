@@ -166,6 +166,32 @@ try {
     if (prev === undefined) delete process.env.MASK_TEST_FORCE_EXDEV; else process.env.MASK_TEST_FORCE_EXDEV = prev;
     rmSync(t2, { recursive: true, force: true }); rmSync(path.dirname(d2), { recursive: true, force: true });
   }
+
+  console.log('V. 内置构建源码（旧镜像 / vendor 被挂载时自给自足）');
+  const { _ensureSources, _sourcesReady } = require(path.join(ROOT, 'server', 'services', 'enginesInstaller.js'));
+  const embedded = require(path.join(ROOT, 'server', 'services', 'engineSources.js'));
+  const { extractZip } = require(path.join(ROOT, 'server', 'services', 'zipService.js'));
+  const srcEntries = extractZip(Buffer.from(embedded.zip_b64, 'base64'));
+  ok('V1 内置源码是非空 zip 且条目数对得上', srcEntries.length === embedded.entries && srcEntries.length > 10,
+    `${srcEntries.length} vs ${embedded.entries}`);
+
+  // 源码改了却忘记重跑 scripts/build-engine-sources.mjs → 这里必须红
+  const drift = srcEntries.filter((e) => {
+    const disk = path.join(ROOT, 'vendor', ...e.name.split('/'));
+    return existsSync(disk) && !readFileSync(disk).equals(e.data);
+  });
+  ok('V2 内置源码与 vendor/ 里的文件一致（改了源码要重跑生成脚本）',
+    drift.length === 0, drift.slice(0, 3).map((e) => e.name).join('、'));
+
+  const vdir = mkdtempSync(path.join(tmpdir(), 'mask-src-'));
+  try {
+    ok('V3 空目录里识别为「源码缺失」', _sourcesReady(vdir) === false);
+    _ensureSources(vdir);
+    ok('V4 内置源码能铺开且三处探针齐全', _sourcesReady(vdir) === true
+      && existsSync(path.join(vdir, 'godlp-cli', 'main.go'))
+      && existsSync(path.join(vdir, 'engines-src', 'godlp', 'go.mod'))
+      && existsSync(path.join(vdir, 'sensitive-word-workspace', 'src', 'main', 'java', 'local', 'mask', 'SensitiveWordCli.java')));
+  } finally { rmSync(vdir, { recursive: true, force: true }); }
 } finally {
   child.kill();
   await sleep(300);
