@@ -70,7 +70,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
 
-## 功能（v0.4.5）
+## 功能（v0.4.6）
 
 | 菜单 | 说明 |
 |---|---|
@@ -127,7 +127,9 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **v0.4.5 修「vendor 挂载点不能执行程序」**：生产把宿主机目录挂到 `/app/vendor`，挂载点带 `noexec`，于是 JDK/Go/Maven 明明解压好了，Maven 一启动就 `spawnSync /app/vendor/maven/bin/mvn EACCES`——文件在、可读、可写，就是不能执行；`vendor` 里的 `java`、`go`、编译出来的 `godlp-cli` 都会栽在同一个地方，逐个 `chmod` 没用。现在安装器先写一个最小脚本到 `vendor/` 真跑一次探测：能执行就维持原样；不能执行就把**可执行的部分**（JDK/Go/Maven、`godlp-cli`）装到项目内 `.engines/`（可用 `MASK_ENGINES_HOME` 指定别处），并在 `vendor/.engines-home.json` 记下来。引擎默认命令在取用那一刻解析这份标记，所以不需要在设置页手改命令，也不用重启服务。`vendor` 里上一轮已经解压好的 JDK/Go/Maven 会直接复制过去，不重新下载；jar 只需要被 java 读、不需要执行位，继续留在 `vendor/sensitive-word/`。项目目录也写不进去时退到系统临时目录，并在日志里说清楚「容器重建会丢」。`.engines/` 不在镜像层，容器重建就没了——想留住它，把 `./.engines:/app/.engines` 挂成卷（别挂在 noexec 的共享盘上）。
 
-**开发机仍没有 Docker，以上生产问题都是靠线上日志定位、在本机用等价的目录布局与强制降级开关复现**：`check-setup` 的 W 段覆盖「探测可执行 → 降级目录 → 标点文件 → 引擎默认命令跟着换 → 标点文件写坏退回 vendor」。真容器里的完整按钮流程仍未实跑。
+**v0.4.6 修「复制过去照样不能执行」**：v0.4.5 的探测已经证明 `.engines` 这个目录**能**执行程序，可生产上 Maven 还是 `spawnSync /app/.engines/maven/bin/mvn EACCES`。根因不在挂载点，在源文件：宿主机挂进来的卷（exfat / vfat / 共享盘）不保存执行位，从里面解出来的 `mvn`、`java`、`go` 本来就是 0644；安装器用 `fs.cpSync` 把它们复制到 `.engines`，权限照抄，复制到哪都执行不了。`canExecIn` 测的是「往这个目录新写一个脚本能不能跑」，它给的答案是对的，坑在后面那步复制。现在安装器按工具链布局把该执行的文件补回 0755（JDK 的 `bin/*` 与 `lib/jspawnhelper`、Go 的 `bin/*` 与 `pkg/tool/*`、Maven 的 `bin/*` 以及 `godlp-cli` 本体；`boot/*.jar` 这类只读文件不碰），装完**真跑一次**才算就绪——`java -version`、`go version`、`mvn -v`、godlp-cli 空输入喂一笔；现有副本跑不起来就重装，有缓存压缩包时重新解压（tar 会恢复归档里的 0755，不受源卷影响），解压临时目录也从系统临时目录挪到运行时目录下，顺带避免跨设备复制。**「装好了」从此以能不能跑为准，不以文件在不在为准。**
+
+**开发机仍没有 Docker，以上生产问题都是靠线上日志定位、在本机用等价的目录布局与强制降级开关复现**：`check-setup` 的 W 段覆盖「探测可执行 → 降级目录 → 标点文件 → 引擎默认命令跟着换 → 标点文件写坏退回 vendor」，X 段覆盖「复制丢执行位 → 补 0755 → 真跑验证」（X1 复现「复制后 mvn 跑不了」，X3 补位后能跑，X4 只动该动的文件）。**X3/X4 只在 POSIX 上有意义，开发机是 Windows，本机实测的只有 Windows 分支（chmod 空操作）**，Linux 分支靠线上验证。真容器里的完整按钮流程仍未实跑。
 
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
@@ -173,7 +175,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 33 = 390 项
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 38 = 395 项
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 

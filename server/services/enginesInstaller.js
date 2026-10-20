@@ -1,5 +1,5 @@
 'use strict';
-// 外部脱敏引擎装配器（v0.4.5）：首次启动安装，之后只做存在性检查。
+// 外部脱敏引擎装配器（v0.4.6）：首次启动安装，之后只做存在性检查 + 真跑一次验证。
 //
 // 为什么放在 server/ 下而不是 scripts/：在线升级白名单只允许 server/**.js、web/dist、package.json，
 // 装在 scripts/ 的安装器进不了升级包——生产上点了按钮也只会跑旧脚本。放在 server/ 里升级就能带过去。
@@ -57,7 +57,12 @@ const die = (m) => { throw new Error(m); };
 
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { stdio: 'inherit', cwd: ROOT, ...opts });
-  if (r.error) die(`${cmd} 启动失败：${r.error.message}`);
+  if (r.error) {
+    const extra = r.error.code === 'EACCES'
+      ? '（文件在、但不能执行：挂载点带 noexec 或丢失执行位。设 MASK_ENGINES_HOME 指向普通磁盘目录可绕开）'
+      : '';
+    die(`${cmd} 启动失败${extra}：${r.error.message}`);
+  }
   if (r.status !== 0) die(`${cmd} ${args.join(' ')} 退出码 ${r.status}`);
 }
 
@@ -273,6 +278,55 @@ function adoptVendorCopy(rel, destAbs) {
   }
 }
 
+// v0.4.6：只「复制」不够。生产实测 .engines 的探测脚本能跑（目录确实可执行），
+// 但从 vendor 复制过去的 mvn 还是 EACCES——源卷（宿主机的 exfat/vfat/共享盘）本来就不存
+// 执行位，解出来的 mvn/java/go 是 0644，cpSync 原样复制，复制到哪都执行不了。
+// 这里按工具链布局把 argv[0] 与编译器工具补回 0755，装完再真跑一次版本命令验证。
+const EXEC_RULES = {
+  jdk: [/^bin\//, /^lib\/jspawnhelper$/],
+  go: [/^bin\//, /^pkg\/tool\//], // go build 要调用 pkg/tool/*/compile、link，全是可执行文件
+  maven: [/^bin\//],
+};
+
+function chmodExecTree(dir, kind) {
+  if (IS_WIN) return 0;
+  const rules = EXEC_RULES[kind] || [];
+  let n = 0;
+  const walk = (rel) => {
+    for (const name of readdirSync(path.join(dir, rel))) {
+      const relp = rel ? `${rel}/${name}` : name;
+      const abs = path.join(dir, relp);
+      let st;
+      try { st = fs.lstatSync(abs); } catch { continue; }
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        try { fs.chmodSync(abs, 0o755); } catch { /* 只读目录保持原样 */ }
+        walk(relp);
+        continue;
+      }
+      if (!rules.some((re) => re.test(relp))) continue;
+      try { fs.chmodSync(abs, 0o755); n++; } catch { /* 权限不够就交给后面的验证报错 */ }
+    }
+  };
+  if (existsSync(dir)) walk('');
+  return n;
+}
+
+// 装没装好不看文件在不在，看它跑不跑
+function canRun(cmd, args, opts = {}) {
+  try { return runOut(cmd, args, opts).status === 0; } catch { return false; }
+}
+const verifyJdk = (java) => canRun(java, ['-version']);
+const verifyGo = (go) => canRun(go, ['version']);
+const verifyMvn = (mvn) => canRun(mvn, ['-v'], {
+  shell: IS_WIN, env: { ...process.env, JAVA_HOME: BUILD_JAVA_HOME },
+});
+// godlp-cli 约定 stdin → stdout JSON，空输入回 {"entities":[]}，正好拿来验证能执行
+const verifyGodlp = (exe) => canRun(exe, [], { input: '', timeout: 15000 });
+
+// 解压临时目录放在运行时目录下：和最终目标同一文件系统，能 rename 而不必跨设备复制
+const tmpFor = (kind) => path.join(ENGINES_HOME, `.tmp-${kind}`);
+
 // Linux arm64 的 Adoptium/华为镜像分别换架构段
 function urlsForJdk(urls) {
   if (IS_WIN || ARCH !== 'arm64') return urls;
@@ -280,15 +334,12 @@ function urlsForJdk(urls) {
 }
 
 function ensureJdk() {
-  if (existsSync(path.join(VENDOR_TARGETS.jdk, 'bin', `java${EXE}`)) && !FORCE) {
-    log('JDK：已就绪'); BUILD_JAVA_HOME = VENDOR_TARGETS.jdk; return;
-  }
-  if (ENGINES_HOME !== VENDOR && !FORCE
-    && adoptVendorCopy('jdk', VENDOR_TARGETS.jdk)
-    && existsSync(path.join(VENDOR_TARGETS.jdk, 'bin', `java${EXE}`))) {
-    BUILD_JAVA_HOME = VENDOR_TARGETS.jdk;
-    log(`JDK：已从 vendor 复制到 ${VENDOR_TARGETS.jdk}`);
-    return;
+  const javaBin = path.join(VENDOR_TARGETS.jdk, 'bin', `java${EXE}`);
+  if (existsSync(javaBin) && !FORCE) {
+    const fixed = chmodExecTree(VENDOR_TARGETS.jdk, 'jdk');
+    if (fixed) log(`JDK：补回执行位（${fixed} 个文件）`);
+    if (verifyJdk(javaBin)) { log('JDK：已就绪'); BUILD_JAVA_HOME = VENDOR_TARGETS.jdk; return; }
+    log('JDK：现有副本跑不起来（多半是执行位丢了），重装');
   }
   const sys = findSystemJdk();
   if (sys && !FORCE) {
@@ -296,11 +347,25 @@ function ensureJdk() {
     const link = path.join(VENDOR_TARGETS.jdk, 'bin', 'java');
     rmSync(link, { force: true });
     symlinkSync(sys.java, link);
-    BUILD_JAVA_HOME = sys.home;
-    log(`JDK：使用系统安装（${sys.home}），已链接到 ${link}`);
-    return;
+    if (verifyJdk(link)) {
+      BUILD_JAVA_HOME = sys.home;
+      log(`JDK：使用系统安装（${sys.home}），已链接到 ${link}`);
+      return;
+    }
+    log('JDK：系统 JDK 链接后仍不能执行，改为自带一份');
+    rmSync(link, { force: true });
   }
   const zip = P('vendor', 'dl', IS_WIN ? 'jdk21.zip' : 'jdk21.tar.gz');
+  // 没缓存时先试复制（走得快）；有缓存就直接解压——tar 会恢复归档里的 0755，不受源卷影响
+  if (!existsSync(zip) && ENGINES_HOME !== VENDOR && !FORCE && adoptVendorCopy('jdk', VENDOR_TARGETS.jdk)) {
+    chmodExecTree(VENDOR_TARGETS.jdk, 'jdk');
+    if (verifyJdk(javaBin)) {
+      BUILD_JAVA_HOME = VENDOR_TARGETS.jdk;
+      log(`JDK：已从 vendor 复制并补齐执行位（${VENDOR_TARGETS.jdk}）`);
+      return;
+    }
+    log('JDK：复制过来的副本仍不能执行，改为用压缩包重装');
+  }
   if (!existsSync(zip)) {
     const urls = IS_WIN
       ? ['https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.zip',
@@ -310,22 +375,32 @@ function ensureJdk() {
         'https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/linux/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz'];
     downloadWithFallback(urlsForJdk(urls), zip);
   }
-  extractArchive(zip, P('vendor', 'tmp-jdk'));
-  moveInnerDir(P('vendor', 'tmp-jdk'), VENDOR_TARGETS.jdk);
+  extractArchive(zip, tmpFor('jdk'));
+  moveInnerDir(tmpFor('jdk'), VENDOR_TARGETS.jdk);
+  chmodExecTree(VENDOR_TARGETS.jdk, 'jdk');
   BUILD_JAVA_HOME = VENDOR_TARGETS.jdk;
+  if (!verifyJdk(javaBin)) {
+    die(`JDK 解压到 ${VENDOR_TARGETS.jdk} 了，但 java -version 仍跑不起来——`
+      + `这个目录所在的文件系统可能不允许执行程序，请把 MASK_ENGINES_HOME 指到普通磁盘目录后重试`);
+  }
   log(`JDK：已解压到 ${VENDOR_TARGETS.jdk}`);
 }
 
 // ---------- 4. Go ----------
 function ensureGo() {
-  if (existsSync(path.join(VENDOR_TARGETS.go, 'bin', `go${EXE}`)) && !FORCE) { log('Go：已就绪'); return; }
-  if (ENGINES_HOME !== VENDOR && !FORCE
-    && adoptVendorCopy('go', VENDOR_TARGETS.go)
-    && existsSync(path.join(VENDOR_TARGETS.go, 'bin', `go${EXE}`))) {
-    log(`Go：已从 vendor 复制到 ${VENDOR_TARGETS.go}`);
-    return;
+  const goBin = path.join(VENDOR_TARGETS.go, 'bin', `go${EXE}`);
+  if (existsSync(goBin) && !FORCE) {
+    const fixed = chmodExecTree(VENDOR_TARGETS.go, 'go');
+    if (fixed) log(`Go：补回执行位（${fixed} 个文件）`);
+    if (verifyGo(goBin)) { log('Go：已就绪'); return; }
+    log('Go：现有副本跑不起来（多半是执行位丢了），重装');
   }
   const zip = P('vendor', 'dl', IS_WIN ? 'go.zip' : 'go.tar.gz');
+  if (!existsSync(zip) && ENGINES_HOME !== VENDOR && !FORCE && adoptVendorCopy('go', VENDOR_TARGETS.go)) {
+    chmodExecTree(VENDOR_TARGETS.go, 'go');
+    if (verifyGo(goBin)) { log(`Go：已从 vendor 复制并补齐执行位（${VENDOR_TARGETS.go}）`); return; }
+    log('Go：复制过来的副本仍不能执行，改为用压缩包重装');
+  }
   if (!existsSync(zip)) {
     const goArch = ARCH === 'arm64' ? 'arm64' : 'amd64';
     const urls = IS_WIN
@@ -335,21 +410,31 @@ function ensureGo() {
         `https://mirrors.aliyun.com/golang/go1.23.4.linux-${goArch}.tar.gz`];
     downloadWithFallback(urls, zip);
   }
-  extractArchive(zip, P('vendor', 'tmp-go'));
-  moveInnerDir(P('vendor', 'tmp-go'), VENDOR_TARGETS.go);
+  extractArchive(zip, tmpFor('go'));
+  moveInnerDir(tmpFor('go'), VENDOR_TARGETS.go);
+  chmodExecTree(VENDOR_TARGETS.go, 'go');
+  if (!verifyGo(goBin)) {
+    die(`Go 解压到 ${VENDOR_TARGETS.go} 了，但 go version 仍跑不起来——`
+      + `这个目录所在的文件系统可能不允许执行程序，请把 MASK_ENGINES_HOME 指到普通磁盘目录后重试`);
+  }
   log(`Go：已解压到 ${VENDOR_TARGETS.go}`);
 }
 
 // ---------- 5. Maven ----------
 function ensureMaven() {
-  if (existsSync(path.join(VENDOR_TARGETS.maven, 'bin', IS_WIN ? 'mvn.cmd' : 'mvn')) && !FORCE) { log('Maven：已就绪'); return; }
-  if (ENGINES_HOME !== VENDOR && !FORCE
-    && adoptVendorCopy('maven', VENDOR_TARGETS.maven)
-    && existsSync(path.join(VENDOR_TARGETS.maven, 'bin', IS_WIN ? 'mvn.cmd' : 'mvn'))) {
-    log(`Maven：已从 vendor 复制到 ${VENDOR_TARGETS.maven}`);
-    return;
+  const mvn = path.join(VENDOR_TARGETS.maven, 'bin', IS_WIN ? 'mvn.cmd' : 'mvn');
+  if (existsSync(mvn) && !FORCE) {
+    const fixed = chmodExecTree(VENDOR_TARGETS.maven, 'maven');
+    if (fixed) log(`Maven：补回执行位（${fixed} 个文件）`);
+    if (verifyMvn(mvn)) { log('Maven：已就绪'); return; }
+    log('Maven：现有副本跑不起来（多半是执行位丢了），重装');
   }
   const zip = P('vendor', 'dl', IS_WIN ? 'maven.zip' : 'maven.tar.gz');
+  if (!existsSync(zip) && ENGINES_HOME !== VENDOR && !FORCE && adoptVendorCopy('maven', VENDOR_TARGETS.maven)) {
+    chmodExecTree(VENDOR_TARGETS.maven, 'maven');
+    if (verifyMvn(mvn)) { log(`Maven：已从 vendor 复制并补齐执行位（${VENDOR_TARGETS.maven}）`); return; }
+    log('Maven：复制过来的副本仍不能执行，改为用压缩包重装');
+  }
   if (!existsSync(zip)) {
     const ext = IS_WIN ? 'zip' : 'tar.gz';
     // 阿里云 apache 镜像 2026-10 已不再提供 3.9.9（实测 404）；华为云与 Maven Central 都还全
@@ -357,8 +442,13 @@ function ensureMaven() {
       `https://repo1.maven.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.${ext}`];
     downloadWithFallback(urls, zip);
   }
-  extractArchive(zip, P('vendor', 'tmp-maven'));
-  moveInnerDir(P('vendor', 'tmp-maven'), VENDOR_TARGETS.maven);
+  extractArchive(zip, tmpFor('maven'));
+  moveInnerDir(tmpFor('maven'), VENDOR_TARGETS.maven);
+  chmodExecTree(VENDOR_TARGETS.maven, 'maven');
+  if (!verifyMvn(mvn)) {
+    die(`Maven 解压到 ${VENDOR_TARGETS.maven} 了，但 mvn -v 仍跑不起来——`
+      + `这个目录所在的文件系统可能不允许执行程序，请把 MASK_ENGINES_HOME 指到普通磁盘目录后重试`);
+  }
   log(`Maven：已解压到 ${VENDOR_TARGETS.maven}`);
 }
 
@@ -451,7 +541,11 @@ function ensureSensitiveWord() {
 function ensureGodlp() {
   // 二进制必须能执行：定位在 ENGINES_HOME 下（vendor 不能执行时就是 .engines/godlp）
   const exe = path.join(ENGINES_HOME, 'godlp', `godlp-cli${EXE}`);
-  if (existsSync(exe) && !FORCE) { log('godlp：已就绪'); return; }
+  if (existsSync(exe) && !FORCE) {
+    try { fs.chmodSync(exe, 0o755); } catch { /* Windows 无所谓 */ }
+    if (verifyGodlp(exe)) { log('godlp：已就绪'); return; }
+    log('godlp：现有二进制跑不起来（多半是执行位丢了），重新编译');
+  }
   if (!existsSync(P('vendor', 'godlp-cli', 'go.mod'))) {
     die(`找不到 vendor/godlp-cli/go.mod${VENDOR_MOUNT_HINT}`);
   }
@@ -461,6 +555,7 @@ function ensureGodlp() {
   const go = path.join(VENDOR_TARGETS.go, 'bin', `go${EXE}`);
   run(go, ['mod', 'tidy'], { cwd: P('vendor', 'godlp-cli'), env });
   run(go, ['build', '-trimpath', '-ldflags', '-s -w', '-o', exe, '.'], { cwd: P('vendor', 'godlp-cli'), env });
+  try { fs.chmodSync(exe, 0o755); } catch { /* Windows 无所谓 */ }
   log(`godlp：可执行文件已生成（${exe}）`);
 }
 
@@ -554,5 +649,6 @@ module.exports = {
   _enginesHome: () => ENGINES_HOME,
   _resolveEnginesHome: resolveEnginesHome,
   _canExecIn: canExecIn,
+  _chmodExecTree: chmodExecTree, _canRun: canRun, _tmpFor: tmpFor,
   _ensureSources: ensureSources, _sourcesReady: sourcesReady,
 };

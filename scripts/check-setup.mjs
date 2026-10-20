@@ -4,7 +4,7 @@
 //       进度与日志采集 / 成功与失败退出码 / 结束后可再次触发 / 日志落盘 / 真实脚本参数校验
 // 用 MASK_ENGINES_SETUP_SCRIPT 把安装器换成临时 mock——自检绝不联网下载 GB 级依赖。
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -267,6 +267,53 @@ try {
     `, { MASK_ENGINES_MARKER: marker });
     ok('W8 标点文件损坏时退回 vendor', bad.home === path.join(ROOT, 'vendor'), JSON.stringify(bad));
   } finally { rmSync(mk, { recursive: true, force: true }); }
+
+  console.log('X. 复制时丢执行位 → 补齐并真跑验证（v0.4.5 生产 `.engines/maven/bin/mvn EACCES` 回归）');
+  // 生产现场：宿主机把 vendor 挂成不存执行位的盘（exfat/vfat/共享盘），解出来的 mvn 是 0644；
+  // 安装器把 vendor 里的那份 copySync 到 .engines，权限照抄，于是 .engines 里也不能执行。
+  const { _chmodExecTree, _canRun, _tmpFor } = require(installerPath);
+  const isPosix = process.platform !== 'win32';
+  const xt = mkdtempSync(path.join(tmpdir(), 'mask-x-'));
+  try {
+    // 造一份「丢了执行位的 maven」：bin/mvn 是能跑的脚本，但 0644
+    const srcMvn = path.join(xt, 'src', 'maven');
+    mkdirSync(path.join(srcMvn, 'bin'), { recursive: true });
+    mkdirSync(path.join(srcMvn, 'boot'), { recursive: true });
+    writeFileSync(path.join(srcMvn, 'bin', 'mvn'), '#!/bin/sh\necho "Apache Maven 3.9.9"\nexit 0\n', 'utf8');
+    writeFileSync(path.join(srcMvn, 'boot', 'plexus-classworlds.jar'), 'jar', 'utf8');
+    if (isPosix) chmodSync(path.join(srcMvn, 'bin', 'mvn'), 0o644);
+
+    const dst = path.join(xt, 'dst', 'maven');
+    mkdirSync(path.dirname(dst), { recursive: true });
+    const { cpSync } = require('node:fs');
+    cpSync(srcMvn, dst, { recursive: true });
+    const mvn = path.join(dst, 'bin', 'mvn');
+
+    ok('X1 复制过来的 mvn 跑不起来（复现生产现象）', _canRun(mvn, ['-v']) === false);
+
+    const n = _chmodExecTree(dst, 'maven');
+    if (isPosix) {
+      ok('X2 补齐执行位，bin/ 下的 mvn 变成可执行', n >= 1 && (statSync(mvn).mode & 0o111) !== 0, `n=${n}`);
+      ok('X3 补位后 mvn 真的能跑', _canRun(mvn, ['-v']) === true);
+      ok('X4 只动该动的（boot/*.jar 不给执行位）',
+        (statSync(path.join(dst, 'boot', 'plexus-classworlds.jar')).mode & 0o111) === 0);
+    } else {
+      // Windows 没有执行位，chmod 是空操作，但必须不抛错、也不误改别处
+      ok('X2 Windows 上 chmodExecTree 是空操作（返回 0）', n === 0, `n=${n}`);
+    }
+
+    // 验证助手不能把「文件在、但跑不了」当成就绪
+    const junk = path.join(xt, 'junk');
+    writeFileSync(junk, 'not a program', 'utf8');
+    if (isPosix) chmodSync(junk, 0o755);
+    ok('X5 不能执行的文件判为未就绪', _canRun(junk, []) === false);
+    ok('X6 真能执行的文件判为就绪', _canRun(process.execPath, ['--version']) === true);
+
+    // 解压临时目录必须落在运行时目录里（和最终目标同一文件系统，能 rename 不跨设备复制）
+    const h = _tmpFor('maven');
+    ok('X7 解压临时目录在运行时目录下且按工具链分目录',
+      path.basename(h) === '.tmp-maven' && h.startsWith(require(installerPath)._enginesHome() + path.sep), h);
+  } finally { rmSync(xt, { recursive: true, force: true }); }
 } finally {
   child.kill();
   await sleep(300);

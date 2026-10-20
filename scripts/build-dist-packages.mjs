@@ -134,6 +134,8 @@ function deployNote(variant) {
       '  JDK/Go/Maven 与 godlp-cli 装到 /app/.engines，并在 vendor/.engines-home.json 记下来；',
       '  引擎默认命令会跟着走，无需手改。想留住它就挂 ./.engines:/app/.engines，或用',
       '  MASK_ENGINES_HOME 指到别处（同样不能是 noexec 挂载点）。',
+      '· v0.4.6 起，从宿主机卷复制过来的程序会补回执行位（exfat/共享盘不存 0755），装完还会',
+      '  真跑一次 java -version / go version / mvn -v / godlp-cli 才报「已就绪」。',
       '· 构建镜像未在本仓库的开发机上实测（开发机没有 Docker）；构建阶段的 godlp Linux 二进制',
       '  已交叉编译验证，sensitive-word jar 已在本机构建。首次 build 需要联网拉 Go/Maven 依赖。',
     ],
