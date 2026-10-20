@@ -70,7 +70,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
 
-## 功能（v0.4.7）
+## 功能（v0.4.8）
 
 | 菜单 | 说明 |
 |---|---|
@@ -131,7 +131,9 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **v0.4.7 把「运行时目录」这件事收口**：v0.4.6 装完还要求手工去 compose 里加 `MASK_ENGINES_HOME`，这一步现在不需要了。①不设这个变量时，`vendor` 不能执行就**先放 `$MASK_DATA_DIR/engines`**——Docker 里那就是挂出来的数据卷，容器重建不丢；镜像层的 `.engines/` 退到第二顺位，系统临时目录垫底。②设了这个变量就以它为准，而且**不能执行就当场报错退出**（v0.4.6 只是打一句「注意」然后硬装，最后照样 EACCES，白等十几分钟）。③容器里会读 `/proc/self/mounts` 判断这个目录是不是在镜像层：是就如实提示「容器重建后要重装一次」，不假装它能持久。④注意 `/data/engines` 只在 `/data` 真的挂了卷时才持久——容器自己的数据目录是 `/app/data`，两者不是一回事。
 
-**开发机仍没有 Docker，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位、在本机用等价的目录布局与强制降级开关复现**：`check-setup` 的 W 段覆盖「探测可执行 → 降级目录 → 标点文件 → 引擎默认命令跟着换 → 标点文件写坏退回 vendor」，X 段覆盖「复制丢执行位 → 补 0755 → 真跑验证」（X1 复现「复制后 mvn 跑不了」，X3 补位后能跑，X4 只动该动的文件）。**X3/X4 只在 POSIX 上有意义，开发机是 Windows，本机实测的只有 Windows 分支（chmod 空操作）**，Linux 分支靠线上验证。真容器里的完整按钮流程仍未实跑。
+**v0.4.8 修「共享卷上文件是 0000」**：飞牛（fnOS）这类共享卷把文件的 mode 报成 `0000`——不是「没有执行位」，而是**连读都不行**。只补执行位的做法在这里会绕过问题：`chmod a+rwX` 对 0000 的文件也只加 rw 不加 x，而 JDK 的 `lib/*`、Go 的源码、sensitive-word 的 pom 全都是 0000，`java` 自己都打不开自己的库。现在安装器在复制/解压之后先把整棵树抬到「至少 目录 0755 / 文件 0644」，再按布局补执行位；**只加不减**，正常机器上一个字节都不动。同一套处理用在缓存压缩包（解压前先补读权限）、内置源码铺开、sensitive-word 工作区复制上。另外 `MASK_ENGINES_HOME` 指到容器里不存在的路径时，报错直接给出可用的路径（容器数据目录是 `$MASK_DATA_DIR`，一般是 `/app/data`，`/data/engines` 只有在 `/data` 真的挂了卷时才存在）。
+
+**开发机仍没有 Docker，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位、在本机用等价的目录布局与强制降级开关复现**：`check-setup` 的 W 段覆盖「探测可执行 → 降级目录 → 标点文件 → 引擎默认命令跟着换 → 标点文件写坏退回 vendor」，X 段覆盖「复制丢执行位 → 补 0755 → 真跑验证」（X1 复现「复制后 mvn 跑不了」，X3 补位后能跑，X4 只动该动的文件）。**X3/X4 只在 POSIX 上有意义，开发机是 Windows，本机实测的只有 Windows 分支（chmod 空操作）**，Linux 分支靠线上验证。真容器里的完整按钮流程仍未实跑。
 
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
@@ -177,7 +179,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 42 = 399 项
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 44 = 401 项（Windows 上 X3/X4/X10/X11 四条只测 POSIX，Linux 跑 48）
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 

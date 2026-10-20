@@ -1,5 +1,5 @@
 'use strict';
-// 外部脱敏引擎装配器（v0.4.7）：首次启动安装，之后只做存在性检查 + 真跑一次验证。
+// 外部脱敏引擎装配器（v0.4.8）：首次启动安装，之后只做存在性检查 + 真跑一次验证。
 //
 // 为什么放在 server/ 下而不是 scripts/：在线升级白名单只允许 server/**.js、web/dist、package.json，
 // 装在 scripts/ 的安装器进不了升级包——生产上点了按钮也只会跑旧脚本。放在 server/ 里升级就能带过去。
@@ -96,7 +96,17 @@ function downloadWithFallback(urls, dest) {
 }
 
 // 解压：.zip 用 unzip/Expand-Archive，.tar.gz/.tgz 用 tar
+// 共享卷上的文件可能是 0000：读都读不了，解压/构建都会以「权限不够」的形式失败
+function ensureReadable(p) {
+  if (IS_WIN) return;
+  try {
+    const st = fs.lstatSync(p);
+    if (st.isFile() && (st.mode & 0o444) !== 0o444) fs.chmodSync(p, (st.mode & 0o7777) | 0o644);
+  } catch { /* 不存在或改不动，交给后面的报错 */ }
+}
+
 function extractArchive(archive, dest) {
+  ensureReadable(archive);
   rmSync(dest, { recursive: true, force: true });
   mkdirSync(dest, { recursive: true });
   if (/\.zip$/i.test(archive)) {
@@ -194,11 +204,13 @@ function resolveEnginesHome() {
     const h = path.resolve(process.env.MASK_ENGINES_HOME);
     log(`引擎运行时目录：${h}（MASK_ENGINES_HOME 指定）`);
     try { mkdirSync(h, { recursive: true }); } catch (e) {
-      die(`MASK_ENGINES_HOME=${h} 建不出来：${e.message}`);
+      die(`MASK_ENGINES_HOME=${h} 建不出来（${e.code || e.message}）——`
+        + `容器里的数据目录是 ${DATA_DIR}，改用 ${path.join(DATA_DIR, 'engines')}（数据卷，重建不丢），`
+        + '或者把 compose 里那个变量删掉，让安装器自己挑');
     }
     if (!canExecIn(h)) {
       die(`MASK_ENGINES_HOME=${h} 里的程序不能执行（noexec 挂载，或文件系统不存执行位）——`
-        + '换一个普通磁盘目录，比如 /app/data/engines（数据卷里，容器重建不丢）');
+        + `改用 ${path.join(DATA_DIR, 'engines')} 这类普通磁盘目录后重试`);
     }
     warnIfEphemeral(h);
     return h;
@@ -330,24 +342,57 @@ const EXEC_RULES = {
   maven: [/^bin\//],
 };
 
-function chmodExecTree(dir, kind) {
+// v0.4.8：只知道「补执行位」还不够。飞牛（fnOS）这类共享卷上的文件 mode 可能是 0000——
+// 连读都不行（`chmod a+rwX` 对 0000 文件也只加 rw、不加 x，得 `chmod a+rx`）。所以先把整棵树
+// 抬到「至少 目录 0755 / 文件 0644」，再按布局补执行位；只加不减，正常机器上一个字节都不动。
+const MIN_FILE = 0o644;
+const MIN_DIR = 0o755;
+
+// 纯计算，单独拿出来给自检（Windows 上没法真造出 0000 的文件）
+function modeFix(st) {
+  const want = st.isDirectory() ? MIN_DIR : MIN_FILE;
+  return (st.mode & want) === want ? 0 : ((st.mode & 0o7777) | want);
+}
+
+function ensureTreeModes(dir) {
   if (IS_WIN) return 0;
-  const rules = EXEC_RULES[kind] || [];
   let n = 0;
   const walk = (rel) => {
-    for (const name of readdirSync(path.join(dir, rel))) {
+    let names;
+    try { names = readdirSync(path.join(dir, rel)); } catch { return; }
+    for (const name of names) {
       const relp = rel ? `${rel}/${name}` : name;
       const abs = path.join(dir, relp);
       let st;
       try { st = fs.lstatSync(abs); } catch { continue; }
       if (st.isSymbolicLink()) continue;
-      if (st.isDirectory()) {
-        try { fs.chmodSync(abs, 0o755); } catch { /* 只读目录保持原样 */ }
-        walk(relp);
-        continue;
-      }
+      const m = modeFix(st);
+      if (m) { try { fs.chmodSync(abs, m); n++; } catch { /* 改不动就交给后面的验证报错 */ } }
+      if (st.isDirectory()) walk(relp);
+    }
+  };
+  if (existsSync(dir)) walk('');
+  return n;
+}
+
+function chmodExecTree(dir, kind) {
+  if (IS_WIN) return 0;
+  const fixed = ensureTreeModes(dir);
+  if (fixed) log(`补回读权限/目录权限（${fixed} 个条目，常见于共享卷上 mode=0000 的文件）`);
+  const rules = EXEC_RULES[kind] || [];
+  let n = 0;
+  const walk = (rel) => {
+    let names;
+    try { names = readdirSync(path.join(dir, rel)); } catch { return; }
+    for (const name of names) {
+      const relp = rel ? `${rel}/${name}` : name;
+      const abs = path.join(dir, relp);
+      let st;
+      try { st = fs.lstatSync(abs); } catch { continue; }
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) { walk(relp); continue; }
       if (!rules.some((re) => re.test(relp))) continue;
-      try { fs.chmodSync(abs, 0o755); n++; } catch { /* 权限不够就交给后面的验证报错 */ }
+      try { fs.chmodSync(abs, (st.mode & 0o7777) | 0o755); n++; } catch { /* 权限不够就交给后面的验证报错 */ }
     }
   };
   if (existsSync(dir)) walk('');
@@ -509,6 +554,10 @@ function sourcesReady(baseDir = P('vendor')) {
 }
 
 function ensureSources(baseDir = P('vendor')) {
+  // 源码文件在共享卷上可能 mode=0000：存在但读不了，go build 会报莫名其妙的错
+  for (const rel of [['godlp-cli'], ['engines-src', 'godlp'], ['sensitive-word-workspace']]) {
+    ensureTreeModes(path.join(baseDir, ...rel));
+  }
   if (sourcesReady(baseDir)) { log('构建源码：已就绪'); return; }
   log('镜像里缺构建源码（旧镜像或 vendor/ 被宿主机卷盖住），铺开内置源码副本…');
   const buf = Buffer.from(EMBEDDED_SRC.zip_b64, 'base64');
@@ -535,6 +584,9 @@ const VENDOR_MOUNT_HINT = '——内置源码副本也没能铺开，检查 vend
 function ensureSensitiveWord() {
   const jarHome = path.join(ENGINES_HOME, 'sensitive-word', 'sensitive-word-cli.jar');
   const jarVendor = path.join(VENDOR, 'sensitive-word', 'sensitive-word-cli.jar');
+  // jar 是 java 读的，只要有读权限；共享卷上可能是 0000
+  ensureTreeModes(path.join(ENGINES_HOME, 'sensitive-word'));
+  ensureTreeModes(path.join(VENDOR, 'sensitive-word'));
   // jar 只被 java 读，不需要执行位：vendor 里已有的（镜像构建产物）照样能用
   if ((existsSync(jarHome) || existsSync(jarVendor)) && !FORCE) { log('sensitive-word：已就绪'); return; }
   const srcWs = path.join(VENDOR, 'sensitive-word-workspace');
@@ -548,6 +600,7 @@ function ensureSensitiveWord() {
     ws = path.join(ENGINES_HOME, 'build', 'sensitive-word-workspace');
     rmSync(ws, { recursive: true, force: true });
     fs.cpSync(srcWs, ws, { recursive: true, filter: (s) => path.basename(s) !== 'target' });
+    ensureTreeModes(ws); // 从共享卷复制过来，可能带着 0000
     log(`构建目录改到 ${ws}（vendor 里的程序不能执行）`);
   }
   mkdirSync(path.dirname(jarHome), { recursive: true });
@@ -691,7 +744,7 @@ module.exports = {
   _enginesHome: () => ENGINES_HOME,
   _resolveEnginesHome: resolveEnginesHome,
   _canExecIn: canExecIn,
-  _chmodExecTree: chmodExecTree, _canRun: canRun, _tmpFor: tmpFor,
+  _chmodExecTree: chmodExecTree, _ensureTreeModes: ensureTreeModes, _modeFix: modeFix, _canRun: canRun, _tmpFor: tmpFor,
   _onImageLayer: onImageLayer, _dataDir: () => DATA_DIR,
   _ensureSources: ensureSources, _sourcesReady: sourcesReady,
 };

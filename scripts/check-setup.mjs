@@ -315,6 +315,34 @@ try {
       path.basename(h) === '.tmp-maven' && h.startsWith(require(installerPath)._enginesHome() + path.sep), h);
   } finally { rmSync(xt, { recursive: true, force: true }); }
 
+  // 飞牛（fnOS）共享卷上的文件可能是 mode 0000：连读都不行，`chmod a+rwX` 也补不出执行位
+  const { _ensureTreeModes, _modeFix } = require(installerPath);
+  const fake = (mode, dir) => ({ mode, isDirectory: () => dir });
+  ok('X8 mode 0000 的文件补成 0644、目录补成 0755',
+    _modeFix(fake(0o000, false)) === 0o644 && _modeFix(fake(0o000, true)) === 0o755);
+  ok('X9 已有读权限的不动、只少的位才加（0o600 → 0o644，0o755 目录不动）',
+    _modeFix(fake(0o600, false)) === 0o644 && _modeFix(fake(0o644, false)) === 0
+    && _modeFix(fake(0o755, true)) === 0);
+  if (isPosix) {
+    const zt = mkdtempSync(path.join(tmpdir(), 'mask-zero-'));
+    try {
+      const jd = path.join(zt, 'jdk');
+      mkdirSync(path.join(jd, 'bin'), { recursive: true });
+      mkdirSync(path.join(jd, 'lib'), { recursive: true });
+      for (const f of [['bin', 'java'], ['lib', 'modules']]) {
+        writeFileSync(path.join(jd, ...f), 'x', 'utf8');
+        chmodSync(path.join(jd, ...f), 0o000);
+      }
+      chmodSync(path.join(jd, 'lib'), 0o000);
+      const fixed = _ensureTreeModes(jd);
+      ok('X10 mode 0000 的文件被补回可读（否则 java 连自己的 lib 都打不开）',
+        fixed >= 3 && (statSync(path.join(jd, 'bin', 'java')).mode & 0o444) === 0o444
+        && (statSync(path.join(jd, 'lib', 'modules')).mode & 0o444) === 0o444, `fixed=${fixed}`);
+      ok('X11 目录也补回可进入（0000 目录里的文件 walk 不进去）',
+        (statSync(path.join(jd, 'lib')).mode & 0o100) !== 0);
+    } finally { rmSync(zt, { recursive: true, force: true }); }
+  }
+
   console.log('Y. 运行时目录优先级（生产 compose 加 MASK_ENGINES_HOME=/data/engines 的场景）');
   // 单独起子进程：这些环境变量在 require 那一刻就被读进模块常量，同一进程里改不生效
   const homeRun = (env) => {
