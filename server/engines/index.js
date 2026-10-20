@@ -116,46 +116,55 @@ const ENGINES = [
     id: 'cloakdb', name: 'CloakDB', kind: 'tool', hidden: false, applicable: false, category: 'database',
     vendor: 'latryee', home: 'https://github.com/latryee/CloakDB', license: 'Apache-2.0',
     desc: '数据库匿名化/差分隐私：流式处理 SQL、CSV、Parquet，保持外键与校验位。不参与文本识别。',
+    use: '给测试环境造一份脱敏数据库：直接吃 SQL 导出/CSV/Parquet，外键和校验位仍然对得上。',
   },
   {
     id: 'shardingsphere', name: 'Apache ShardingSphere', kind: 'tool', hidden: false, applicable: false, category: 'database',
     vendor: 'Apache', home: 'https://shardingsphere.apache.org', license: 'Apache-2.0',
     desc: '数据库中间件，在 SQL 路由层做字段加密/脱敏。需接入数据库，不参与文本识别。',
+    use: '线上数据库中间件层统一加密/脱敏：应用不改代码，SQL 到库前按规则改写字段。',
   },
   {
     id: 'postgresql_anonymizer', name: 'postgresql_anonymizer', kind: 'tool', hidden: false, applicable: false, category: 'database',
     vendor: 'Dalibo', home: 'https://gitlab.com/dalibo/postgresql_anonymizer', license: 'PostgreSQL License',
     desc: 'PostgreSQL 扩展：用匿名化视图/规则脱敏整库。需数据库实例，不参与文本识别。',
+    use: 'PostgreSQL 整库脱敏：装成扩展后建匿名化视图，导出/给第三方看之前整库替换。',
   },
   {
     id: 'pg_anonymize', name: 'pg_anonymize', kind: 'tool', hidden: false, applicable: false, category: 'database',
     vendor: 'rjuju', home: 'https://github.com/rjuju/pg_anonymize', license: 'PostgreSQL License',
     desc: 'PostgreSQL 逻辑复制脱敏插件。需数据库实例，不参与文本识别。',
+    use: '持续把生产库同步到测试库时顺手脱敏：挂在逻辑复制链路上，不用每次导出一遍。',
   },
   {
     id: 'ranger', name: 'Apache Ranger', kind: 'tool', hidden: false, applicable: false, category: 'platform',
     vendor: 'Apache', home: 'https://ranger.apache.org', license: 'Apache-2.0',
     desc: 'Hadoop 生态数据权限与脱敏策略中心。需大数据平台，不参与文本识别。',
+    use: 'Hive/HDFS 集群上按用户/角色配脱敏策略：谁能看明文、谁只能看掩码，由平台统一管。',
   },
   {
     id: 'arx', name: 'ARX', kind: 'tool', hidden: false, applicable: false, category: 'stats',
     vendor: 'arx-deidentifier', home: 'https://github.com/arx-deidentifier/arx', license: 'Apache-2.0',
     desc: '统计数据集匿名化（k-匿名、l-多样性、差分隐私）。面向表格数据，不参与文本识别。',
+    use: '对外发布统计表格前做隐私保护：k-匿名/l-多样性/差分隐私，防止从表格反推个人。',
   },
   {
     id: 'sdcMicro', name: 'sdcMicro', kind: 'tool', hidden: false, applicable: false, category: 'stats',
     vendor: 'sdcTools', home: 'https://github.com/sdcTools/sdcMicro', license: 'GPL-2.0',
     desc: 'R 包：统计披露控制与微观数据匿名化。面向表格数据，不参与文本识别。',
+    use: '统计调查微观数据发布（R 环境）：sdcMicro 做披露风险度量与匿名化。',
   },
   {
     id: 'jailer', name: 'Jailer', kind: 'tool', hidden: false, applicable: false, category: 'testdata',
     vendor: 'Wisser', home: 'https://github.com/Wisser/Jailer', license: 'Apache-2.0',
     desc: '数据库子集提取与测试数据生成/脱敏。需数据库实例，不参与文本识别。',
+    use: '从生产库抽一小份「够用」的测试数据：按外键关系抽子集，生成/脱敏后给开发用。',
   },
   {
     id: 'anonimatron', name: 'anonimatron', kind: 'tool', hidden: false, applicable: false, category: 'testdata',
     vendor: 'realrolfje', home: 'https://github.com/realrolfje/anonimatron', license: 'Apache-2.0',
     desc: 'JDBC 数据库字段匿名化（Java CLI）。需数据库实例，不参与文本识别。',
+    use: '任意 JDBC 数据库一次性字段清洗：配 YAML 指出哪些列怎么变，CLI 跑一遍。',
   },
 ];
 const isApplicable = (e) => e.applicable !== false;
@@ -319,7 +328,7 @@ function engineList() {
   return ENGINES.map((e) => ({
     id: e.id, name: e.name, kind: e.kind, hidden: e.hidden,
     applicable: isApplicable(e), category: e.category || 'text',
-    vendor: e.vendor, home: e.home, license: e.license, desc: e.desc,
+    vendor: e.vendor, home: e.home, license: e.license, desc: e.desc, use: e.use || '',
     command: e.kind === 'stdio' ? (cfg.commands[e.id] || e.defCommand || '') : '',
     enabled: !!cfg.enabled[e.id],
     last_probe: isApplicable(e) ? (probeCache[e.id] || null) : null,

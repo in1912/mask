@@ -72,7 +72,21 @@ cd web && npm run dev
 | scrubadub | Python 边车 | 邮箱/URL/信用卡等规则识别；中文紧贴英文时依赖标点边界，可能漏报 |
 | OpenAI Privacy Filter | Python 边车 | 1.5B MoE token 分类模型，CPU 本地推理，模型约 2.8GB；首次加载较慢 |
 
-表格之外，`D:\脱敏` 里的 9 个数据库/大数据/统计类工具（CloakDB、ShardingSphere、postgresql_anonymizer、pg_anonymize、Ranger、ARX、sdcMicro、Jailer、anonimatron）也在设置页列出，标注**「不参与文本识别」**——它们靠连库或整表处理工作，不产出文本实体坐标，因此不能当主引擎，也不会被探测。
+**边车是什么**：Python 引擎（Presidio / GLiNER / argus / scrubadub / OPF）没法在 Node 里跑，所以由一个独立的 `python/sidecar.py` 进程承载，只监听本机回环地址（默认 9812）。模型加载一次常驻内存，主服务每次识别走本机 HTTP 问它；原文不出机器。主服务启动时发现本机没有边车会自动拉起，用户一般不用手管。
+
+`D:\脱敏` 里的 12 个项目，**3 个能直接用于文本**（Presidio、scrubadub、privacy-filter→OpenAI Privacy Filter），其余 9 个是数据库/大数据/统计类工具，设置页排在文本引擎之后，标注**「不参与文本识别」**——它们产出的是整表/整库的脱敏数据，不是文本里的实体坐标，因此不能当主引擎，也不会被探测。各自什么时候用得上：
+
+| 工具 | 场景 |
+|---|---|
+| CloakDB | 给测试环境造脱敏数据库：直接吃 SQL 导出/CSV/Parquet，外键与校验位仍对得上 |
+| ShardingSphere | 线上数据库中间件层统一加密/脱敏，应用不改代码 |
+| postgresql_anonymizer | PostgreSQL 整库脱敏：建匿名化视图，导出或给第三方前整库替换 |
+| pg_anonymize | 生产→测试的逻辑复制链路上顺手脱敏 |
+| Apache Ranger | Hive/HDFS 集群按用户/角色配脱敏策略 |
+| ARX | 对外发布统计表格前做 k-匿名/l-多样性/差分隐私 |
+| sdcMicro | R 环境下统计调查微观数据的披露控制 |
+| Jailer | 从生产库按外键关系抽测试子集并脱敏 |
+| anonimatron | 任意 JDBC 数据库一次性字段清洗（YAML 配置列规则） |
 
 外部引擎实体类型自动映射到内置规则（PERSON→person…），映射不到的用 `EXT` 码；坐标对不上按实体内容重定位（Python 码点 vs JS UTF-16 单元天然有偏差）。引擎失败**如实报 502**，绝不静默降级假装脱敏成功。
 

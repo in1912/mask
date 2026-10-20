@@ -203,11 +203,14 @@ const engTest = ref({ id: '', text: '联系人张三，手机 13812345678，邮�
 const engTestOut = ref(null);
 const KIND_ZH = { builtin: '内置', stdio: '命令行', sidecar: 'Python 边车', tool: '数据工具' };
 const CATEGORY_ZH = { text: '文本识别', database: '数据库脱敏', platform: '大数据平台', stats: '统计发布', testdata: '测试数据' };
+// 能直接用的（参与文本识别）永远排前面；不能用的数据/统计工具放后面
 const engText = computed(() => engVisible.value.filter((e) => e.applicable !== false));
 const engTools = computed(() => engVisible.value.filter((e) => e.applicable === false));
 async function loadEngines() {
   eng.value = await api('/engines');
-  engVisible.value = eng.value.engines.filter((e) => !e.hidden);
+  // 能直接用的文本引擎排前面，数据/统计工具排后面（sort 稳定，同组保持注册表顺序）
+  engVisible.value = eng.value.engines.filter((e) => !e.hidden)
+    .sort((a, b) => (a.applicable === false ? 1 : 0) - (b.applicable === false ? 1 : 0));
 }
 function engIsOn(e) {
   const c = eng.value.config;
@@ -367,6 +370,9 @@ onMounted(async () => {
       </div>
       <p v-if="engMsg" :class="engMsg.includes('不可用') || engMsg.includes('失败') ? 'err' : 'mut'" style="margin:4px 0 10px;font-size:13px">{{ engMsg }}</p>
 
+      <p class="mut" style="font-size:12.5px;margin:10px 0 8px">
+        <b>可直接用于文本脱敏</b>（参与聊天与文档识别，依赖已随项目装好，点「探测」即验证）：
+      </p>
       <div v-for="e in engText" :key="e.id" style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <input v-if="eng.config.mode === 'parallel'" type="checkbox" :checked="engIsOn(e)" @change="engToggle(e)" />
@@ -394,7 +400,8 @@ onMounted(async () => {
 
       <div style="border-top:1px solid var(--bd);margin:14px 0 10px"></div>
       <p class="mut" style="font-size:12.5px;margin:0 0 8px">
-        以下工具随项目源码归档（<code>vendor/engines-src/</code>），面向数据库 / 大数据 / 统计发布场景，<b>不参与聊天与文档的文本识别</b>（不产出实体坐标）：
+        <b>不能用于文本脱敏</b>（随项目源码归档在 <code>vendor/engines-src/</code>）：它们产出的是「整张表/整个库」的脱敏数据，不是文本里的实体坐标，
+        所以进不了聊天与文档的识别管线。各自什么时候用得着，见每张卡片下的说明：
       </p>
       <div v-for="e in engTools" :key="e.id" style="border:1px dashed var(--bd);border-radius:8px;padding:8px 12px;margin-bottom:8px;opacity:.85">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -409,17 +416,19 @@ onMounted(async () => {
           <template v-if="e.home">· <a :href="e.home" target="_blank" rel="noopener">仓库</a></template>
           <template v-if="e.license">· 许可证 {{ e.license }}</template>
         </p>
+        <p v-if="e.use" style="margin:4px 0 0;font-size:12px;color:var(--acc)">什么时候用：{{ e.use }}</p>
       </div>
 
       <div style="border-top:1px solid var(--bd);margin:14px 0 10px"></div>
-      <label class="mut">Python 边车地址（Presidio / GLiNER-PII / argus-redact / scrubadub / OpenAI Privacy Filter 走它；先在本机跑 python python/sidecar.py）</label>
+      <label class="mut">Python 边车地址（Presidio / GLiNER-PII / argus-redact / scrubadub / OpenAI Privacy Filter 走它；主服务启动时会自动拉起，一般不用手开）</label>
       <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
         <input v-model="eng.config.sidecar_url" style="width:280px" placeholder="http://127.0.0.1:9812" />
         <button class="btn sm" @click="engSaveSidecar">保存地址</button>
         <button class="btn sm" @click="eng.config.sidecar_url = 'http://127.0.0.1:9812'">用默认 9812</button>
       </div>
       <p class="mut" style="margin:6px 0 0;font-size:12px">
-        边车是独立的 Python 进程，默认端口 <code>9812</code>。<b>不要填本系统自己的 9909</b>——那会把本系统的网页当成边车，探测只会报「响应异常（HTTP 200）」。
+        边车 = 主服务旁边常驻的一个独立 Python 进程（默认端口 <code>9812</code>）：Python 引擎的模型只加载一次、常驻内存，主服务每次识别走本机 HTTP 问它。
+        它只监听本机回环地址，原文不出机器。<b>不要填本系统自己的 9909</b>——那会把本系统的网页当成边车，探测只会报「响应异常（HTTP 200）」。
       </p>
 
       <div style="border-top:1px solid var(--bd);margin:14px 0 10px"></div>
