@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PORT = 9927;
@@ -145,16 +146,48 @@ try {
     ok('F5 切回内置：启发式恢复（金额被咬）', pv3.status === 200 && !pv3.json.masked.includes('25000'), pv3.json);
   }
 
-  console.log('G. 致谢（探测成功的才进）');
+  console.log('G. 致谢（引用即致谢：全部外部引擎常驻，探测状态只是附加信息）');
   {
     const anon = await req('GET', '/api/engines/ack');
     ok('G1 匿名 401', anon.status === 401, anon.status);
     const ack = await req('GET', '/api/engines/ack', { token: tk });
     const names = ack.json.items.map((x) => x.name);
-    ok('G2 探测成功的 godlp/自检引擎在列', names.includes('godlp') && names.some((n) => n.includes('自检')), names);
-    ok('G3 没探测成功的 presidio 不在列', !names.includes('Presidio'), names);
+    ok('G2 五个外部引擎全部在列（不管装没装）', ['godlp', 'sensitive-word', 'Presidio', 'GLiNER-PII', 'argus-redact'].every((n) => names.includes(n)), names);
+    ok('G3 隐藏自检引擎不进致谢', !names.some((n) => n.includes('自检')), names);
     const g = ack.json.items.find((x) => x.name === 'godlp');
-    ok('G4 致谢带仓库/许可/厂商', g.home.includes('gitee.com/bytedance/godlp') && !!g.vendor && !!g.license, g);
+    ok('G4 探测成功的带 ok 状态', g.probe && g.probe.ok === true, g.probe);
+    const p = ack.json.items.find((x) => x.name === 'Presidio');
+    ok('G5 没探测过的 probe=null（未探测）', p.probe === null, p);
+    ok('G6 致谢带仓库/许可/厂商', g.home.includes('gitee.com/bytedance/godlp') && !!g.vendor && !!g.license, g);
+  }
+  console.log('H. 报障回归：命令不存在给人话、边车填错说清楚');
+  {
+    // 用户 2026-10-20 报障：godlp/java 未安装时只看到 cmd.exe 的 GBK 乱码「不是内部或外部命令」
+    await putConfig(tk, { mode: 'primary', primary: 'builtin', commands: { godlp: 'mask-no-such-exe-xyz' } });
+    const t = await req('POST', '/api/engines/test', { token: tk, body: { id: 'godlp', text: '联系 13812345678' } });
+    ok('H1 命令不存在 → 中文「找不到可执行程序」且无乱码', t.json.ok === false
+      && /找不到可执行程序「mask-no-such-exe-xyz」/.test(t.json.error || '') && !/�/.test(t.json.error || ''), t.json);
+    const p = await req('POST', '/api/engines/probe', { token: tk, body: { id: 'godlp' } });
+    ok('H2 探测同样给人话', p.json.ok === false && /找不到可执行程序/.test(p.json.error || ''), p.json);
+
+    // 用户把边车地址填成了本系统自己的 9909：回的是 SPA 首页 HTML，旧文案只有「响应异常（HTTP 200）」
+    const htmlSrv = http.createServer((q, s) => {
+      s.setHeader('content-type', 'text/html; charset=utf-8');
+      s.end('<!doctype html><html><body>不是边车</body></html>');
+    });
+    await new Promise((r) => htmlSrv.listen(9928, '127.0.0.1', r));
+    try {
+      const saved = await putConfig(tk, { sidecar_url: 'http://127.0.0.1:9928' });
+      ok('H3 别的网页服务地址可以保存（保存只拦本系统端口）', saved.status === 200, saved.json);
+      const ps = await req('POST', '/api/engines/probe', { token: tk, body: { id: 'presidio' } });
+      ok('H4 探测到网页 → 指出不是边车并给默认 9812', ps.json.ok === false
+        && /网页/.test(ps.json.error || '') && /9812/.test(ps.json.error || ''), ps.json);
+    } finally { htmlSrv.close(); }
+
+    const bad = await putConfig(tk, { sidecar_url: BASE });
+    ok('H5 保存时直接拦住本系统自己的端口', bad.status === 400 && /9812/.test(bad.json.error || ''), bad.json);
+    const good = await putConfig(tk, { sidecar_url: 'http://127.0.0.1:9812' });
+    ok('H6 正常边车地址可保存', good.status === 200, good.json);
   }
 } catch (e) {
   fail++;

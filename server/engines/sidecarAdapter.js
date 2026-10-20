@@ -16,18 +16,38 @@ async function sidecarCall(base, path, init, timeoutMs) {
     res = await fetch(url, { ...init, signal: ac.signal });
   } catch (e) {
     clearTimeout(timer);
-    throw new Error(`边车连不上（${url}）：${e.cause?.code || e.message}——先启动 python/sidecar.py`);
+    throw new Error(`边车连不上（${url}）：${e.cause?.code || e.message}——先启动 python/sidecar.py（默认 http://127.0.0.1:9812）`);
   }
+  let text = '';
+  try { text = await res.text(); } catch { /* 读不到按空处理 */ }
   let body = null;
-  try { body = await res.json(); } catch { /* 非 JSON 按空处理 */ }
+  if (text.trim()) { try { body = JSON.parse(text); } catch { body = null; } }
   clearTimeout(timer);
-  return { status: res.status, body };
+  return { status: res.status, body, text: text.trim(), contentType: res.headers.get('content-type') || '' };
+}
+
+// 地址填成了别的 HTTP 服务（最常见：填成本系统自己的 9909，回的是 SPA 首页 HTML）
+function nonJsonError(r, base) {
+  const looksHtml = /text\/html/i.test(r.contentType) || /^<(?:!doctype|html)/i.test(r.text);
+  if (looksHtml) {
+    return new Error(
+      `边车地址返回的是网页（HTTP ${r.status}），不是边车的 JSON——你填的 ${base} 很可能是本系统自己的地址`
+      + `（本系统默认端口 9909）；边车是独立的 Python 进程 python/sidecar.py，默认 http://127.0.0.1:9812`
+    );
+  }
+  return new Error(
+    `边车响应不是 JSON（HTTP ${r.status}${r.contentType ? '，' + r.contentType : ''}）——`
+    + `确认地址指向 python/sidecar.py（默认 http://127.0.0.1:9812），而不是别的网页服务`
+  );
 }
 
 async function sidecarProbe(base, id) {
   const r = await sidecarCall(base, `/probe?engine=${encodeURIComponent(id)}`, { method: 'GET' }, PROBE_TIMEOUT);
-  if (r.status === 404) throw new Error(`边车不认识引擎 ${id}（版本不一致？）`);
-  if (!r.body || typeof r.body.ok !== 'boolean') throw new Error(`边车响应异常（HTTP ${r.status}）`);
+  if (!r.body || typeof r.body !== 'object') throw nonJsonError(r, base);
+  if (r.status === 404) throw new Error(`边车不认识引擎 ${id}（边车版本不一致？）`);
+  if (typeof r.body.ok !== 'boolean') {
+    throw new Error(`边车响应异常（HTTP ${r.status}）${r.body.error ? '：' + r.body.error : '：JSON 里没有 ok 字段'}——确认地址是 python/sidecar.py（默认 9812）`);
+  }
   return r.body;
 }
 
@@ -37,8 +57,9 @@ async function sidecarDetect(base, id, text, lang) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ engine: id, text: String(text || ''), lang: lang || '' }),
   }, DETECT_TIMEOUT);
-  if (r.status !== 200 || !r.body || r.body.ok !== true) {
-    throw new Error((r.body && r.body.error) || `边车 detect 失败（HTTP ${r.status}）`);
+  if (!r.body || typeof r.body !== 'object') throw nonJsonError(r, base);
+  if (r.status !== 200 || r.body.ok !== true) {
+    throw new Error((r.body && r.body.error) || `边车 detect 失败（HTTP ${r.status}）——确认地址是 python/sidecar.py（默认 9812）`);
   }
   return { entities: Array.isArray(r.body.entities) ? r.body.entities : [] };
 }

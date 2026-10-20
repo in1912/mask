@@ -83,6 +83,20 @@ const BY_ID = new Map(ENGINES.map((e) => [e.id, e]));
 // ---------- 配置（settings 表 mask_engines） ----------
 // { mode:'primary'|'parallel', primary:'builtin', enabled:{id:bool}, commands:{id:cmd}, sidecar_url }
 const DEFAULT_CFG = { mode: 'primary', primary: 'builtin', enabled: { builtin: true }, commands: {}, sidecar_url: 'http://127.0.0.1:9812' };
+
+// 老配置自愈：本机回环地址 + 本系统自己的端口（默认 9909）绝不可能是边车——
+// 那是本系统的 SPA 首页，探测只会报「响应异常（HTTP 200）」。读到就回落到默认 9812。
+function normalizeSidecarUrl(raw) {
+  const s = String(raw || DEFAULT_CFG.sidecar_url);
+  try {
+    const x = new URL(s);
+    const local = ['127.0.0.1', 'localhost', '0.0.0.0', '::1', '[::1]'].includes(x.hostname);
+    const port = Number(x.port || (x.protocol === 'https:' ? 443 : 80));
+    if (local && port === Number(process.env.PORT || 9909)) return DEFAULT_CFG.sidecar_url;
+  } catch { /* 格式不对原样返回，探测时报格式错 */ }
+  return s;
+}
+
 function getCfg() {
   const saved = getSetting(CFG_KEY, null);
   if (!saved || typeof saved !== 'object') return { ...DEFAULT_CFG, enabled: { ...DEFAULT_CFG.enabled }, commands: {} };
@@ -91,7 +105,7 @@ function getCfg() {
     primary: BY_ID.has(saved.primary) ? saved.primary : 'builtin',
     enabled: { ...DEFAULT_CFG.enabled, ...(saved.enabled || {}) },
     commands: { ...(saved.commands || {}) },
-    sidecar_url: String(saved.sidecar_url || DEFAULT_CFG.sidecar_url),
+    sidecar_url: normalizeSidecarUrl(saved.sidecar_url),
   };
 }
 function saveCfg(patch) {
@@ -225,9 +239,16 @@ function engineList() {
   }));
 }
 function acknowledgements() {
-  // 「成功配置」= 最近一次探测 ok 的外部引擎（含隐藏的自检引擎——它探测成功也说明边车链路通了）
-  return ENGINES.filter((e) => e.kind !== 'builtin' && (probeCache[e.id] || {}).ok)
-    .map((e) => ({ name: e.name, vendor: e.vendor, home: e.home, license: e.license, desc: e.desc, probe_at: probeCache[e.id].at }));
+  // 用户拍板（2026-10-20）：系统引用了就要致谢——全部外部引擎常驻列表，
+  // 探测状态只是附加信息（可用/未探测/失败），不再决定是否出现在页面上
+  return ENGINES.filter((e) => e.kind !== 'builtin' && !e.hidden)
+    .map((e) => {
+      const p = probeCache[e.id] || null;
+      return {
+        name: e.name, vendor: e.vendor, home: e.home, license: e.license, desc: e.desc,
+        probe: p ? { ok: p.ok, at: p.at, error: p.error || '' } : null,
+      };
+    });
 }
 
 // ---------- 门面：业务侧统一入口（替代直接调 engine.encode） ----------

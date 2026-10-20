@@ -394,7 +394,11 @@ onMounted(async () => {
       <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
         <input v-model="eng.config.sidecar_url" style="width:280px" placeholder="http://127.0.0.1:9812" />
         <button class="btn sm" @click="engSaveSidecar">保存地址</button>
+        <button class="btn sm" @click="eng.config.sidecar_url = 'http://127.0.0.1:9812'">用默认 9812</button>
       </div>
+      <p class="mut" style="margin:6px 0 0;font-size:12px">
+        边车是独立的 Python 进程，默认端口 <code>9812</code>。<b>不要填本系统自己的 9909</b>——那会把本系统的网页当成边车，探测只会报「响应异常（HTTP 200）」。
+      </p>
 
       <div style="border-top:1px solid var(--bd);margin:14px 0 10px"></div>
       <label class="mut">单引擎试跑（不落库、不产生对照）</label>
@@ -424,19 +428,22 @@ onMounted(async () => {
     </div>
 
     <div v-else-if="tab === 'ack'" class="card">
-      <p class="mut" style="margin:0 0 12px;font-size:13px">在「引擎」页探测成功（即真正配置可用）的开源引擎在此致谢——谢谢它们让脱敏更准。</p>
-      <div v-if="!ackItems.length" class="empty">还没有成功配置的外部引擎</div>
+      <p class="mut" style="margin:0 0 12px;font-size:13px">系统引用了的开源引擎在此致谢——谢谢它们让脱敏更准。状态一栏只是「这台机器上是否配置可用」，不影响致谢。</p>
+      <div v-if="!ackItems.length" class="empty">（无外部引擎引用）</div>
       <div v-for="(a, i) in ackItems" :key="i" style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <b>{{ a.name }}</b><span class="mut">{{ a.vendor }}</span>
           <span style="flex:1"></span>
-          <span class="mut" style="font-size:12px">{{ (a.probe_at || '').slice(0, 16).replace('T', ' ') }} 探测可用</span>
+          <span v-if="a.probe && a.probe.ok" class="tag ok">可用 ✓ {{ (a.probe.at || '').slice(0, 16).replace('T', ' ') }}</span>
+          <span v-else-if="a.probe" class="tag danger">探测失败</span>
+          <span v-else class="tag">未探测（装好后在「引擎」页点探测）</span>
         </div>
         <p class="mut" style="margin:4px 0 0;font-size:12px">
           <a v-if="a.home" :href="a.home" target="_blank" rel="noopener">{{ a.home }}</a>
           <template v-if="a.license"> · 许可证 {{ a.license }}</template>
         </p>
         <p class="mut" style="margin:4px 0 0;font-size:12px">{{ a.desc }}</p>
+        <p v-if="a.probe && !a.probe.ok && a.probe.error" class="err" style="margin:4px 0 0;font-size:12px">{{ a.probe.error }}</p>
       </div>
     </div>
 

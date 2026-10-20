@@ -29,6 +29,23 @@ router.post('/probe', async (req, res) => {
   res.json(r);
 });
 
+const APP_PORT = Number(process.env.PORT || 9909);
+
+// 边车地址校验：用户最容易把本系统自己的 9909 填进来（回的是 SPA 首页 HTML，探测只剩「响应异常 HTTP 200」）
+function sidecarUrlError(raw) {
+  if (raw === undefined || raw === null || raw === '') return '';
+  const u = String(raw).trim();
+  if (!/^https?:\/\/\S+$/i.test(u)) return '边车地址格式不对（要 http://主机:端口，如 http://127.0.0.1:9812）';
+  let x;
+  try { x = new URL(u); } catch { return '边车地址解析失败（要 http://主机:端口，如 http://127.0.0.1:9812）'; }
+  const local = ['127.0.0.1', 'localhost', '0.0.0.0', '::1', '[::1]'].includes(x.hostname);
+  const port = Number(x.port || (x.protocol === 'https:' ? 443 : 80));
+  if (local && port === APP_PORT) {
+    return `边车地址是本系统自己的端口 ${APP_PORT}——那会把本系统的网页当成边车。边车是独立的 Python 进程，默认 http://127.0.0.1:9812`;
+  }
+  return '';
+}
+
 // 保存配置：{ mode, primary, enabled, commands, sidecar_url }
 // primary 必须是注册过的引擎；mode 只认 primary|parallel；命令做长度与换行约束（防塞脚本捣乱）
 router.put('/config', (req, res) => {
@@ -38,6 +55,8 @@ router.put('/config', (req, res) => {
       return res.status(400).json({ error: '命令格式不对（≤300 字符、单行）', engine: id });
     }
   }
+  const urlErr = sidecarUrlError(b.sidecar_url);
+  if (urlErr) return res.status(400).json({ error: urlErr });
   const enabled = {};
   for (const [id, v] of Object.entries(b.enabled || {})) {
     if (typeof v === 'boolean') enabled[id] = v;
