@@ -164,5 +164,31 @@ console.log('I. 目录与边界');
   t('I3 无命中返回原文', E.encode('今天天气不错', {}).masked === '今天天气不错');
 }
 
+console.log('J. 人名四路识别（v0.3.0：起因=例会纪要人名全漏 + 上周工作误报成周工）');
+{
+  // 真实例会纪要片段（脱敏过的用户文档，2026-10-20 报障）
+  const minutes = '参会人员：\n温培泉、刘立伟、刘艺彬(请假)\n主 持 人：\n温培泉\n会议记录：\n刘立伟\n会议主题：\n上周工作\n本周工作\n会议内容：\n1、\nOA搭建测试服务器\n温培泉、刘立伟\n7、\n解决8月份数据渠道存在空的数据\n刘艺彬\n10、\n泛微及金蝶接口费用开始走付款流程\n';
+  const r = E.encode(minutes, {});
+  const persons = r.mapping.filter((e) => e.key === 'person').map((e) => e.term);
+  t('J1 顿号姓名列表全识别（含括注与扩姓「温」）', ['温培泉', '刘立伟', '刘艺彬'].every((n) => persons.includes(n)), persons);
+  t('J2 参会人员行脱敏后只剩码（括注保留在码外）', r.masked.includes('温培泉') === false && /\[人名[0-9A-Z]+\]、\[人名[0-9A-Z]+\]、\[人名[0-9A-Z]+\]\(请假\)/.test(r.masked), r.masked.split('\n')[1]);
+  t('J3 排版空格锚定（主 持 人：）识别', r.masked.includes('主 持 人') === true && r.masked.split('主 持 人：')[1].trim().startsWith('['), r.masked.split('主 持 人：')[1]);
+  t('J4 表格独行责任人被全篇传播覆盖', r.masked.includes('刘艺彬') === false, r.masked);
+  t('J5 上周工作/本周工作不再误报成「周工」', r.mapping.some((e) => e.term === '周工') === false && /[上本]周工作/.test(r.masked), r.mapping.filter((e) => e.term === '周工'));
+  t('J6 金蝶（品牌）不进人名', r.mapping.some((e) => e.key === 'person' && e.term.includes('金蝶')) === false, r.mapping.filter((e) => e.term.includes('金蝶')));
+  // 产品列表陷阱：金蝶，金蝶法报，用友数据导出 —— 顿号/逗号分隔但不是姓名
+  const brands = E.encode('导出：金蝶，金蝶法报，用友数据导出（财务）', {});
+  t('J7 产品逗号列表不咬成人名', brands.mapping.some((e) => e.key === 'person') === false, brands.mapping);
+  // 真「周工」称谓仍要识别（姓氏+称谓路没被误伤）
+  const realTitle = E.encode('这个问题请周工评审，王总也会参加', {});
+  t('J8 真称谓（周工/王总）仍识别', realTitle.masked.includes('周工') === false && realTitle.masked.includes('王总') === false, realTitle.masked);
+  // 普通顿号词组不误报：测试、开发、运维（首字非姓氏 → 列表正则天然不匹配）
+  const words = E.encode('本轮迭代涉及：测试、开发、运维、上线', {});
+  t('J9 普通词组列表零命中', words.mapping.some((e) => e.key === 'person') === false, words.mapping);
+  // 「关于工资/张总共/李总部」称谓路防误报
+  const trap = E.encode('关于工资的说明：张总共三期发放，李总部已审批', {});
+  t('J10 工资/总共/总部陷阱不误报', trap.mapping.some((e) => e.key === 'person' && ['于工', '张总', '李总'].includes(e.term)) === false, trap.mapping.filter((e) => e.key === 'person'));
+}
+
 console.log(`\n结果：${pass}/${pass + fail}`);
 process.exit(fail ? 1 : 0);

@@ -20,6 +20,13 @@ const V = "[^\\s,，;；、。．:：!！?？（）()\\[\\]【】「」《》\"'
 // ---------------------------------------------------------------------------
 
 const SUR = '王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董潘袁蔡蒋余于杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤';
+// 扩充姓氏表：只喂给「姓名列表 / 角色锚定」这两条语境强的路（v0.3.0，起因=温培泉等漏报，温不在保守表里）。
+// 「姓氏+称谓」仍只用保守 SUR——扩表会把那条弱信号路的误报面炸开（常/成/平/安 这类字开头的词太多）。
+const SUR2 = SUR + '温鲁滕葛易常齐康伍涂颜宫宁栾厉蒲路祖班惠连茹艾容燕冀慎利越兰禄萧禹狄米贝明臧计伏成谈茅庞纪舒屈项祝阮解强柴华封窦井鲍岑费麻倪殷毕安元卜平穆湛祁卞皮桂简双杭包梅盛骆乐邬籍嵇';
+// 列表/锚定 token 里出现这些词就整项拒绝：都是「姓+常用词」陷阱（周工作/成本/计划/上周…）
+// 末尾是常与姓名同现的企业/软件品牌（金/用/泛/钉/飞/影/华/高/万/平 都是姓氏表里的字，
+// 「金蝶，金蝶法报，用友数据导出」这种产品列表会被姓名列表正则咬中）
+const NAME_STOP = ['工作', '公司', '部门', '系统', '平台', '项目', '会议', '数据', '服务', '汇报', '纪要', '流程', '功能', '成本', '预算', '计划', '方案', '进度', '需求', '问题', '风险', '客户', '产品', '运营', '管理', '研发', '测试', '环境', '版本', '接口', '服务器', '代码', '账号', '密码', '报表', '日报', '周报', '月报', '合同', '订单', '财务', '人事', '行政', '采购', '实施', '培训', '优化', '迁移', '搭建', '沟通', '处理', '解决', '准备', '整理', '打印', '订购', '报错', '切换', '修改', '安装', '拷贝', '建立', '整合', '运维', '机房', '网络', '安全', '权限', '架构', '数据库', '日志', '监控', '工单', '值班', '考勤', '绩效', '考核', '奖金', '报销', '差旅', '驻场', '售前', '售后', '商务', '法务', '合规', '审计', '税务', '发票', '回款', '付款', '转账', '对账', '结算', '上午', '下午', '晚上', '周一', '周二', '周三', '周四', '周五', '周六', '周日', '本周', '上周', '下周', '金蝶', '用友', '泛微', '钉钉', '飞书', '影刀', '华为', '高德', '万科', '平安'];
 const TITLE = '(?:先生|女士|老师|教授|医生|工程师|经理|总监|主管|科长|部长|董事长|总经理|律师|会计师|分析师|设计师|总|工)';
 
 const ORG_SUFFIX = '有限公司|有限责任公司|股份有限公司|集团|银行|证券|保险公司|医院|学校|大学|学院|研究院|研究所|事务所|工作室|合作社';
@@ -84,13 +91,55 @@ const RULES = [
   { key: 'tel', zh: '固话', en: 'TEL', cat: 'pii', prio: 56, method: 'regex', scan: scanRe('(?<!\\d)0\\d{2,3}-\\d{7,8}(?!\\d)', 'g') },
   { key: 'bankcard', zh: '银行卡', en: 'BANK', cat: 'pii', prio: 62, method: 'luhn', scan: (text) => { const out = []; const re = /(?<!\d)\d{13,19}(?!\d)/g; let m; while ((m = re.exec(text)) !== null) { if (luhnOk(m[0])) out.push({ term: m[0], start: m.index, end: m.index + m[0].length }); } return out; } },
   { key: 'payacct', zh: '支付账号', en: 'PAY', cat: 'pii', prio: 58, method: 'anchor', scan: anchorScan('(?:支付宝账号|支付宝帐号|支付账号|支付帐号|收款账号)', `${V}{6,30}`) },
-  { key: 'person', zh: '人名', en: 'PER', cat: 'pii', prio: 20, method: 'heuristic', hint: '姓氏+称谓/引号启发式，可能漏或误', scan: (text) => {
+  { key: 'person', zh: '人名', en: 'PER', cat: 'pii', prio: 20, method: 'heuristic', hint: '姓氏+称谓/引号/姓名列表/角色锚定启发式，可能漏或误', scan: (text) => {
     const out = [];
-    const reT = new RegExp(`[${SUR}][一-龥]{0,2}${TITLE}(?![结体归功能谋])`, 'g');
+    const strong = new Set(); // 强语境（列表/锚定/引号）确认过的人名：全篇其余出现一并入码
+    // 1) 姓氏 + 称谓（保守姓氏表）。排除字表补「作资期共额部」：上周工作→周工、关于工资→于工、
+    //    张总共/王总额/李总部——称谓后紧跟这些字头时几乎都是普通词，不是在称呼人
+    const reT = new RegExp(`[${SUR}][一-龥]{0,2}${TITLE}(?![结体归功能谋作资期共额部])`, 'g');
     let m;
     while ((m = reT.exec(text)) !== null) out.push({ term: m[0], start: m.index, end: m.index + m[0].length });
-    const reQ = new RegExp(`[「『“"‘']([${SUR}][一-龥]{1,3})[」』”"’']`, 'g');
-    while ((m = reQ.exec(text)) !== null) out.push({ term: m[1], start: m.index + 1, end: m.index + 1 + m[1].length });
+    // 2) 引号包裹
+    const reQ = new RegExp(`[「『“"‘']([${SUR2}][一-龥]{1,3})[」』”"’']`, 'g');
+    while ((m = reQ.exec(text)) !== null) {
+      out.push({ term: m[1], start: m.index + 1, end: m.index + 1 + m[1].length });
+      strong.add(m[1]);
+    }
+    // 3) 姓名列表：顿号/逗号分隔 ≥2 项，每项「扩充姓氏+1~2 汉字」，可带（请假/线上）类括注。
+    //    例会纪要/工作日报里人名绝大多数长这样，列表语境本身就是强信号
+    const NAME2 = `[${SUR2}][一-龥]{1,2}`;
+    const PAREN = '(?:\\s*[（(][^）)\\n]{1,6}[）)])?';
+    const reL = new RegExp(`${NAME2}${PAREN}(?:\\s*[、，,]\\s*${NAME2}${PAREN})+`, 'g');
+    const nameRe = new RegExp(NAME2, 'g');
+    while ((m = reL.exec(text)) !== null) {
+      nameRe.lastIndex = 0;
+      let n;
+      while ((n = nameRe.exec(m[0])) !== null) {
+        if (NAME_STOP.some((w) => n[0].includes(w))) continue;
+        out.push({ term: n[0], start: m.index + n.index, end: m.index + n.index + n[0].length });
+        strong.add(n[0]);
+      }
+    }
+    // 4) 角色锚定：主持人：/责任人：/参会人员： 后面紧跟的姓名。锚定词允许排版空格
+    //    （例会纪要里常被打散成「主 持 人：」）
+    const ANCHORS = ['参会人员', '与会人员', '出席人员', '列席人员', '出席者', '列席者', '与会者', '主持人', '会议记录', '记录人', '汇报人', '责任人', '经办人', '联系人', '对接人', '负责人', '发起人', '审批人', '创建人', '面试官', '主讲人'];
+    const sp = (s) => s.split('').join('\\s*');
+    const reA = new RegExp(`(?:${ANCHORS.map(sp).join('|')})\\s*[:：]\\s*(${NAME2})${PAREN}`, 'g');
+    while ((m = reA.exec(text)) !== null) {
+      if (NAME_STOP.some((w) => m[1].includes(w))) continue;
+      const off = m.index + m[0].indexOf(m[1]);
+      out.push({ term: m[1], start: off, end: off + m[1].length });
+      strong.add(m[1]);
+    }
+    // 5) 确认后全篇传播：strong 里的人名在文档其余位置的出现（如表格里独占一行的责任人）
+    //    一并标记。弱信号（姓氏+称谓）不参与——真「周工」不能把「上周工作」带进沟里
+    for (const t of strong) {
+      let i = 0;
+      while ((i = text.indexOf(t, i)) !== -1) {
+        out.push({ term: t, start: i, end: i + t.length });
+        i += t.length;
+      }
+    }
     return out;
   } },
   { key: 'nickname', zh: '昵称', en: 'NICK', cat: 'pii', prio: 42, method: 'anchor', scan: anchorScan('(?:昵称|网名|花名)', `${V}{2,30}`) },
@@ -245,7 +294,7 @@ function normalizeFixed(fixed) {
   return out;
 }
 
-function extractCandidates(text, cfg) {
+function extractCandidates(text, cfg, extra) {
   const types = cfg.types || {};
   const on = (k) => types[k] !== false;
   const cands = [];
@@ -262,19 +311,29 @@ function extractCandidates(text, cfg) {
   for (const rule of RULES) {
     if (!rule.scan || !on(rule.key)) continue;
     if (rule.amount && cfg.amount_on === 0) continue;
+    if (cfg._extOnly) continue; // 主引擎=外部引擎：识别完全交给它（固定关键词不受影响）
     for (const hit of rule.scan(text)) {
       cands.push({ term: hit.term, key: rule.key, prio: rule.prio, start: hit.start, end: hit.end });
     }
   }
 
   // 裸数字（默认关）：≥3 位、非年份、非小数一部分
-  if (cfg.mask_numbers) {
+  if (cfg.mask_numbers && !cfg._extOnly) {
     const re = /(?<![\d.,])(\d{3,})(?![\d.])/g;
     let m;
     while ((m = re.exec(text)) !== null) {
       const nextCh = text[m.index + m[0].length] || '';
       if (/^(19|20)\d{2}$/.test(m[0]) && nextCh === '年') continue;
       cands.push({ term: m[0], key: 'numbers', prio: 10, start: m.index, end: m.index + m[0].length });
+    }
+  }
+
+  // 外部引擎候选（v0.3.0 多引擎）：已由 engines/index.js 映射好 key/prio/坐标，
+  // 这里只做形状校验——与内置规则汇入同一个 dedupe（重叠时优先级+跨度定胜负）
+  for (const c of Array.isArray(extra) ? extra : []) {
+    if (c && typeof c.term === 'string' && c.term && c.start >= 0 && c.end > c.start
+      && text.slice(c.start, c.end) === c.term && on(c.key)) {
+      cands.push(c);
     }
   }
 
@@ -296,13 +355,14 @@ function dedupe(cands) {
 }
 
 // persisted: 可选 Map(term -> entry)，会话/文档级持久对照（同一实体全程同码）
-function encode(text, cfg, persisted) {
+// extra: 可选外部引擎候选（多引擎架构，见 server/engines/index.js）
+function encode(text, cfg, persisted, extra) {
   const conf = { ...DEFAULT_CFG, ...(cfg || {}) };
   if (conf.enabled === 0 || conf.enabled === false) {
     return { skipped: true, reason: '脱敏总开关处于关闭状态' };
   }
   const map = persisted instanceof Map ? persisted : new Map();
-  const accepted = dedupe(extractCandidates(String(text), conf));
+  const accepted = dedupe(extractCandidates(String(text), conf, extra));
 
   // B 风格序号续接：从已有编码里恢复各标签计数
   const used = new Set([...map.values()].map((e) => e.code));
@@ -324,7 +384,9 @@ function encode(text, cfg, persisted) {
       added++;
       continue;
     }
-    const rule = c.key === 'fixed' ? { zh: '关键词', en: 'KW', cat: 'ent' } : (RULE_BY_KEY[c.key] || { zh: '数值', en: 'NUM', cat: 'ent' });
+    const rule = c.key === 'fixed' ? { zh: '关键词', en: 'KW', cat: 'ent' }
+      : c.key === 'ext' ? { zh: '外部', en: 'EXT', cat: 'pii' } // 外部引擎未映射类型
+      : (RULE_BY_KEY[c.key] || { zh: '数值', en: 'NUM', cat: 'ent' });
     const entry = { term: c.term, code: makeCode(conf.code_style, rule, used, counters), key: c.key, cat: rule.cat, style: conf.code_style };
     map.set(c.term, entry);
     added++;

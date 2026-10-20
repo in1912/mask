@@ -6,6 +6,7 @@ const { db, getSetting } = require('../db');
 const secret = require('../secret');
 const ai = require('../ai');
 const engine = require('../engine');
+const engines = require('../engines');
 const { extractText } = require('../extract');
 const { loadCfg } = require('./maskRoutes')();
 const { newToken, baseUrl, shareGuide } = require('./shareUtil');
@@ -82,11 +83,16 @@ module.exports = function (ctx) {
   });
 
   // ---- 脱敏：文档级持久对照（同一文档重复执行，同实体同码）----
-  r.post('/documents/:id/mask', (req, res) => {
+  r.post('/documents/:id/mask', async (req, res) => {
     const d = ownDoc(req, res); if (!d) return;
     const cfg = loadCfg(d.user_id);
     const map = docMap(d.id);
-    const out = engine.encode(d.raw_text || '', cfg, map);
+    let out;
+    try {
+      out = await engines.runMask(d.raw_text || '', cfg, map);
+    } catch (e) {
+      return res.status(502).json({ error: `脱敏引擎失败：${e.message}` });
+    }
     if (out.skipped) return res.json({ skipped: true, reason: out.reason });
     // 新增对照落库
     const up = db.prepare("INSERT OR IGNORE INTO mappings (scope_type, scope_id, code, rule_key, category, style, term) VALUES ('doc', ?, ?, ?, ?, ?, ?)");

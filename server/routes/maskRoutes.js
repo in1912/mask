@@ -3,6 +3,7 @@
 const express = require('express');
 const { db } = require('../db');
 const engine = require('../engine');
+const engines = require('../engines');
 
 function loadCfg(uid) {
   const row = db.prepare('SELECT * FROM rule_config WHERE user_id = ?').get(uid);
@@ -39,10 +40,15 @@ module.exports = function () {
   });
 
   // 试运行：一次性 Map，不落 mappings 表；快照进历史
-  r.post('/rules/preview', (req, res) => {
+  r.post('/rules/preview', async (req, res) => {
     const text = String((req.body || {}).text || '');
     if (!text.trim()) return res.status(400).json({ error: '请输入试运行文本' });
-    const out = engine.encode(text, loadCfg(req.user.id));
+    let out;
+    try {
+      out = await engines.runMask(text, loadCfg(req.user.id));
+    } catch (e) {
+      return res.status(502).json({ error: `脱敏引擎失败：${e.message}` });
+    }
     if (out.skipped) return res.json({ skipped: true, reason: out.reason });
     const info = db.prepare('INSERT INTO desens_history (user_id, scope, ref_id, item_count, mapping_json, masked_preview) VALUES (?, ?, NULL, ?, ?, ?)')
       .run(req.user.id, 'preview', out.count, JSON.stringify(out.mapping), out.masked.slice(0, 2000));

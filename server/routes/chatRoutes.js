@@ -6,6 +6,7 @@ const { db, getSetting } = require('../db');
 const secret = require('../secret');
 const ai = require('../ai');
 const engine = require('../engine');
+const engines = require('../engines');
 const { extractText } = require('../extract');
 const { loadCfg } = require('./maskRoutes')();
 
@@ -85,16 +86,25 @@ module.exports = function (ctx) {
       for (const row of rows) map.set(row.term, { term: row.term, code: row.code, key: row.rule_key, cat: row.category, style: row.style || 'A' });
       const preCount = map.size;
       const firstUser = [...msgs].reverse().find((m) => m.role === 'user');
-      const probe = engine.encode(firstUser.content, cfg, map); // 单独探测开关状态
-      if (probe.skipped) { skipped = true; skipReason = probe.reason; }
+      try {
+        const probe = await engines.runMask(firstUser.content, cfg, map); // 单独探测开关状态
+        if (probe.skipped) { skipped = true; skipReason = probe.reason; }
+      } catch (e) {
+        // 外部引擎失败：红线——绝不把原文放给 AI，如实退出
+        return res.status(502).json({ error: `脱敏引擎失败：${e.message}` });
+      }
     }
 
     const entries = [...map.values()];
     const outMsgs = [];
     for (const m of msgs) {
       if (!skipped) {
-        const e = engine.encode(m.content, cfg, map);
-        outMsgs.push({ role: m.role, content: e.masked });
+        try {
+          const e = await engines.runMask(m.content, cfg, map);
+          outMsgs.push({ role: m.role, content: e.masked });
+        } catch (err) {
+          return res.status(502).json({ error: `脱敏引擎失败：${err.message}` });
+        }
       } else outMsgs.push({ role: m.role, content: m.content });
     }
 
