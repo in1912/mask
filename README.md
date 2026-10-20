@@ -70,7 +70,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
 
-## 功能（v0.4.9）
+## 功能（v0.4.10）
 
 | 菜单 | 说明 |
 |---|---|
@@ -133,7 +133,10 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **v0.4.8 修「共享卷上文件是 0000」**：飞牛（fnOS）这类共享卷把文件的 mode 报成 `0000`——不是「没有执行位」，而是**连读都不行**。只补执行位的做法在这里会绕过问题：`chmod a+rwX` 对 0000 的文件也只加 rw 不加 x，而 JDK 的 `lib/*`、Go 的源码、sensitive-word 的 pom 全都是 0000，`java` 自己都打不开自己的库。现在安装器在复制/解压之后先把整棵树抬到「至少 目录 0755 / 文件 0644」，再按布局补执行位；**只加不减**，正常机器上一个字节都不动。同一套处理用在缓存压缩包（解压前先补读权限）、内置源码铺开、sensitive-word 工作区复制上。另外 `MASK_ENGINES_HOME` 指到容器里不存在的路径时，报错直接给出可用的路径（容器数据目录是 `$MASK_DATA_DIR`，一般是 `/app/data`，`/data/engines` 只有在 `/data` 真的挂了卷时才存在）。
 
+
 **v0.4.9 修「模型预取找不到 huggingface_hub」**：生产点「全部安装」时 pip 全部成功，最后一步 `fetch_models.py` 却 `ModuleNotFoundError: No module named 'huggingface_hub'`。依赖是 `pip --target python/vendor` 装的，而这个脚本从来没把 `python/vendor` 插进 `sys.path`（`sidecar.py` 插了，所以边车一直没事）；本机因为有模型目录、`ensureModels` 直接跳过，这行代码从没被执行过。三处一起修：①`fetch_models.py` 自己插 `sys.path`（并加 `--check-deps` 供自检）；②安装器给子进程带上 `PYTHONPATH=python/vendor`；③`huggingface_hub` 显式进 pip 清单与就绪检查，不再指望它被别的包捎带装上。顺带改了失败处理：**命令行引擎与 Python 引擎互不连坐**——以前 Python 侧一失败整轮 `exit 1`，排在后面的 CLI 引擎根本没机会装；现在各自 try、全部跑完再一次性列出「哪些没装上」，有失败就不写「就绪」标点（下次启动重试）。
+
+**v0.4.10 修「边车连不上只剩一句 UND_ERR_SOCKET」**：生产点脱敏只回一句 `边车连不上（http://127.0.0.1:9812/detect）：UND_ERR_SOCKET——先启动 python/sidecar.py`，可边车明明由主服务自动拉起，用户除了进容器翻日志没有别的办法。现在边车有了监管：①主服务记住子进程状态（启动中/就绪/失败/运行中退出、pid、上次退出码与信号、尝试次数），`Logs/sidecar.log` 里的 traceback 也会被读出来；②连不上时**当场再拉一次**（本机地址，20 秒上限），拉起来就静默重试原请求；③仍失败就把状态、退出码、容器内存上限/可用量、日志最后几行一起写进报错——`SIGKILL`/`code=137` 会直接提示「大概率是 OOM，GLiNER 约 1.1GB、OPF 约 2.8GB」。另外：`python3` / `python` 哪个在 PATH 里不固定，启动前逐个验证并记住能用的那个（以前 spawn 失败只会在界面留下一个 socket 错误）；`MASK_NO_SIDECAR=1` 挡住自动拉起时会明说；远程边车地址不会被本机代拉。管理员可用 `GET /api/engines/sidecar` 看进程状态与日志尾，`POST /api/engines/sidecar/start` 手动重试。设置页「引擎」里的探测失败信息改为保留换行、最多 4000 字符，不再是截断的一行。顺带修了升级预检的版本比较：以前直接拿字符串比，`0.4.10 < 0.4.9` 会把这次升级标成「降级」——现在按数字段比（v0.4.9 的旧服务端仍会报这一次，属于旧代码的误判，不影响应用）。
 
 **开发机仍没有 Docker，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位，以上生产问题都是靠线上日志定位、在本机用等价的目录布局与强制降级开关复现**：`check-setup` 的 W 段覆盖「探测可执行 → 降级目录 → 标点文件 → 引擎默认命令跟着换 → 标点文件写坏退回 vendor」，X 段覆盖「复制丢执行位 → 补 0755 → 真跑验证」（X1 复现「复制后 mvn 跑不了」，X3 补位后能跑，X4 只动该动的文件）。**X3/X4 只在 POSIX 上有意义，开发机是 Windows，本机实测的只有 Windows 分支（chmod 空操作）**，Linux 分支靠线上验证。真容器里的完整按钮流程仍未实跑。
 
@@ -165,7 +168,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 外部引擎实体类型自动映射到内置规则（PERSON→person…），映射不到的用 `EXT` 码；坐标对不上按实体内容重定位（Python 码点 vs JS UTF-16 单元天然有偏差）。引擎失败**如实报 502**，绝不静默降级假装脱敏成功。
 
-**边车地址**默认 `http://127.0.0.1:9812`。主服务启动时发现本机地址上没有边车，会自己拉起 `python/sidecar.py`（`MASK_NO_SIDECAR=1` 可关闭）。**不要填本系统自己的 9909**——那会把本系统的网页当成边车，探测只会报「响应异常（HTTP 200）」；保存时会被直接拦下，历史遗留的 9909 配置读取时自动回落 9812。
+**边车地址**默认 `http://127.0.0.1:9812`。主服务启动时发现本机地址上没有边车，会自己拉起 `python/sidecar.py`（`MASK_NO_SIDECAR=1` 可关闭）；之后哪次调用连不上，会当场再拉一次并重试，仍失败就把进程状态、退出码、容器内存与 `Logs/sidecar.log` 最后几行写进报错（`GET /api/engines/sidecar` 随时可查）。**不要填本系统自己的 9909**——那会把本系统的网页当成边车，探测只会报「响应异常（HTTP 200）」；保存时会被直接拦下，历史遗留的 9909 配置读取时自动回落 9812。
 
 **命令行引擎报错**：先按 `PATH`/`PATHEXT` 自己找程序，找不到直接给中文提示（例：`找不到可执行程序「java」…需要先装 JDK/JRE 8+`），不再把 cmd.exe 的 GBK 原始报错甩给用户；Windows 下子进程先 `chcp 65001`，仍有乱码按 GBK 兜底解码。
 
@@ -181,7 +184,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 46 = 403 项（Windows 上 X3/X4/X10/X11 四条只测 POSIX，Linux 跑 50）
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 67 + ssl 16 + engines 45 + setup 55 = 416 项（Windows 上 X3/X4/X10/X11 四条只测 POSIX，Linux 跑 59）
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 

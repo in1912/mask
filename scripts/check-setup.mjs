@@ -6,6 +6,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -403,6 +404,57 @@ try {
         (r.stderr || r.stdout || '').trim().slice(-200));
     } else {
       console.log('  · 跳过 Z2（本机 python/vendor 未装 huggingface_hub，无法验证导入）');
+    }
+  }
+
+  console.log('AA. 边车监管（生产只报一句「边车连不上 UND_ERR_SOCKET」事故回归）');
+  {
+    const launcher = require('../server/sidecarLauncher');
+    ok('AA1 本机回环地址可拉起', launcher.sidecarTarget('http://127.0.0.1:9812')?.port === 9812);
+    ok('AA2 远程地址不代拉', launcher.sidecarTarget('http://10.0.0.5:9812') === null);
+    {
+      const savedPort = process.env.PORT;
+      process.env.PORT = String(PORT); // 本进程不是服务进程，得自己声明端口才测得到这条
+      ok('AA3 不会拉起本系统自己的端口', launcher.sidecarTarget(`http://127.0.0.1:${PORT}`) === null);
+      if (savedPort === undefined) delete process.env.PORT; else process.env.PORT = savedPort;
+    }
+    const s0 = launcher.status();
+    ok('AA4 状态带进程阶段与日志路径', s0.phase === 'idle' && String(s0.log).endsWith('sidecar.log'), JSON.stringify(s0).slice(0, 200));
+
+    // 连不上 → 想自动拉起但被 MASK_NO_SIDECAR 挡住 → 错误必须说清楚原因，而不是一句 socket 错误
+    process.env.MASK_NO_SIDECAR = '1';
+    const { sidecarProbe } = require('../server/engines/sidecarAdapter');
+    let emsg = '';
+    try { await sidecarProbe('http://127.0.0.1:9', 'selftest'); } catch (e) { emsg = e.message; }
+    delete process.env.MASK_NO_SIDECAR;
+    ok('AA5 连不上时错误里带自动拉起状态', emsg.includes('边车连不上') && emsg.includes('MASK_NO_SIDECAR'), emsg.slice(0, 200));
+    ok('AA6 错误里带日志路径', emsg.includes('sidecar.log'), emsg.slice(0, 200));
+
+    // 真拉起一次：本机有 Python 才跑（自检不下载任何东西，启动只 import 标准库）
+    const pyEnv = process.env.MASK_PYTHON;
+    const hasPy = (pyEnv && spawnSync(pyEnv, ['--version'], { encoding: 'utf8' }).status === 0)
+      || spawnSync('python3', ['--version'], { encoding: 'utf8' }).status === 0
+      || spawnSync('python', ['--version'], { encoding: 'utf8' }).status === 0;
+    if (!hasPy) {
+      console.log('  · 跳过 AA7/AA8（本机没有 Python，无法真拉起边车）');
+    } else {
+      const freePort = await new Promise((resolve, reject) => {
+        const s = net.createServer();
+        s.once('error', reject);
+        s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
+      });
+      const base = `http://127.0.0.1:${freePort}`;
+      try {
+        const r = await launcher.ensureSidecar(() => base);
+        ok('AA7 本机没有边车时自动拉起并健康', r.started === true && (await launcher.healthy(base)).ok === true, JSON.stringify(r));
+        ok('AA8 拉起后状态为 ready 且有 pid', launcher.status().phase === 'ready' && !!launcher.status().pid, JSON.stringify(launcher.status()).slice(0, 200));
+
+        // AA9：边车被杀掉后再探测 → 适配器自己拉起并重试成功（生产 UND_ERR_SOCKET 的原场景）
+        launcher.stop();
+        await sleep(300);
+        const pr = await sidecarProbe(base, 'selftest');
+        ok('AA9 边车挂了以后探测能自动拉起并重试成功', pr.ok === true && launcher.status().phase === 'ready', JSON.stringify({ pr, st: launcher.status() }).slice(0, 300));
+      } finally { launcher.stop(); }
     }
   }
 } finally {

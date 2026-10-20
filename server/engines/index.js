@@ -211,7 +211,8 @@ function saveCfg(patch) {
 let probeCache = {};
 try { probeCache = JSON.parse(getSetting('engines_probe') || '{}') || {}; } catch { probeCache = {}; }
 function rememberProbe(id, ok, error) {
-  probeCache[id] = { ok: !!ok, at: new Date().toISOString(), error: ok ? '' : String(error || '').slice(0, 300) };
+  // v0.4.10：边车诊断信息（进程状态 + 日志尾）要能带到界面上，300 字符装不下
+  probeCache[id] = { ok: !!ok, at: new Date().toISOString(), error: ok ? '' : String(error || '').slice(0, 4000) };
   try { setSetting('engines_probe', probeCache); } catch { /* 展示层失败不炸主流程 */ }
 }
 

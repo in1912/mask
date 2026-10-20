@@ -335,6 +335,15 @@ console.log('\n== H. 备份下载 + 升级日志 ==');
   ok('日志解析出 actor/ok/restart_suppressed', last.actor === 'aiadmin' && last.ok === true && last.restart_suppressed === true);
 }
 
+console.log('\n== J. 版本比较按数字段（0.4.10 不是 0.4.9 的降级） ==');
+{
+  const { cmpVersion } = require(path.join(ROOT, 'server', 'services', 'upgradeService.js'));
+  ok('J1 0.4.10 > 0.4.9', cmpVersion('0.4.10', '0.4.9') === 1);
+  ok('J2 0.4.2 < 0.4.10', cmpVersion('0.4.2', '0.4.10') === -1);
+  ok('J3 同版本相等', cmpVersion('1.2.3', 'v1.2.3') === 0);
+  ok('J4 正式版高于预发布', cmpVersion('1.0.0', '1.0.0-beta.1') === 1);
+}
+
 console.log('\n== I. 开发机真实仓库未被动过 ==');
 {
   // 自检全程只该写临时副本；这里对真实仓库做一次防御性核对

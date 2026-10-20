@@ -469,7 +469,7 @@ onMounted(async () => {
           <template v-if="e.home">· <a :href="e.home" target="_blank" rel="noopener">仓库</a></template>
           <template v-if="e.license && e.kind !== 'builtin'">· 许可证 {{ e.license }}</template>
         </p>
-        <p v-if="e.last_probe && !e.last_probe.ok" class="err" style="margin:4px 0 0;font-size:12px">{{ e.last_probe.error }}</p>
+        <p v-if="e.last_probe && !e.last_probe.ok" class="err" style="margin:4px 0 0;font-size:12px;white-space:pre-wrap">{{ e.last_probe.error }}</p>
         <div v-if="e.kind === 'stdio'" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
           <input v-model="e.command" style="flex:1;min-width:260px;font-size:12px" placeholder="命令（stdin 进文本，stdout 出实体 JSON）" />
           <button class="btn sm" @click="engSaveCmd(e)">保存命令</button>
@@ -556,7 +556,7 @@ onMounted(async () => {
           <template v-if="a.license"> · 许可证 {{ a.license }}</template>
         </p>
         <p class="mut" style="margin:4px 0 0;font-size:12px">{{ a.desc }}</p>
-        <p v-if="a.probe && !a.probe.ok && a.probe.error" class="err" style="margin:4px 0 0;font-size:12px">{{ a.probe.error }}</p>
+        <p v-if="a.probe && !a.probe.ok && a.probe.error" class="err" style="margin:4px 0 0;font-size:12px;white-space:pre-wrap">{{ a.probe.error }}</p>
       </div>
     </div>
 

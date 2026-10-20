@@ -10,22 +10,61 @@ const PROBE_TIMEOUT = 120000;
 // 首次调用要加载 1~3GB 模型（CPU），30 秒会误判为失败；加载完常驻内存，之后毫秒级
 const DETECT_TIMEOUT = 180000;
 
-async function sidecarCall(base, path, init, timeoutMs) {
-  const url = String(base || '').replace(/\/+$/, '') + path;
+async function fetchOnce(url, init, timeoutMs) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// v0.4.10：连不上时先看边车到底怎么了。
+// 之前只抛一句 UND_ERR_SOCKET，用户不知道是没启动、启动后崩了、还是 MASK_NO_SIDECAR 挡着。
+// 现在本机地址会再尝试拉起一次（20 秒上限），恢复就静默重试，不恢复就把进程状态和日志尾贴进错误。
+async function sidecarCall(base, path, init, timeoutMs) {
+  const url = String(base || '').replace(/\/+$/, '') + path;
   let res;
   try {
-    res = await fetch(url, { ...init, signal: ac.signal });
+    res = await fetchOnce(url, init, timeoutMs);
   } catch (e) {
-    clearTimeout(timer);
-    throw new Error(`边车连不上（${url}）：${e.cause?.code || e.message}——先启动 python/sidecar.py（默认 http://127.0.0.1:9812）`);
+    if (e.name === 'AbortError') {
+      throw new Error(`边车请求超时（${url}，${Math.round(timeoutMs / 1000)} 秒）——引擎可能在加载模型，稍后重试`);
+    }
+    const first = e.cause?.code || e.message;
+    let launcher = null;
+    try { launcher = require('../sidecarLauncher'); } catch { /* 升级包缺文件时照旧报原错 */ }
+    if (launcher) {
+      const rec = await launcher.recover(base, Number(process.env.MASK_SIDECAR_RECOVER_MS || 20000));
+      if (rec.remote) {
+        throw new Error(`边车连不上（${url}）：${first}——${base} 不是本机地址，本服务不会替你拉起，请检查那台机器上的 python/sidecar.py`);
+      }
+      if (rec.ok) {
+        try {
+          res = await fetchOnce(url, init, timeoutMs);
+        } catch (e2) {
+          if (e2.name === 'AbortError') {
+            throw new Error(`边车请求超时（${url}，${Math.round(timeoutMs / 1000)} 秒）——引擎可能在加载模型，稍后重试`);
+          }
+          throw new Error(`边车刚被重新拉起，但仍连不上（${url}）：${e2.cause?.code || e2.message}`
+            + launcher.diagnose(base));
+        }
+      } else if (rec.skipped) {
+        throw new Error(`边车连不上（${url}）：${first}——自动拉起已被 MASK_NO_SIDECAR=1 关闭`
+          + launcher.diagnose(base));
+      } else {
+        throw new Error(`边车连不上（${url}）：${first}——本服务尝试自动拉起也没成功（日志 Logs/sidecar.log）`
+          + launcher.diagnose(base));
+      }
+    } else {
+      throw new Error(`边车连不上（${url}）：${first}——先启动 python/sidecar.py（默认 http://127.0.0.1:9812）`);
+    }
   }
   let text = '';
   try { text = await res.text(); } catch { /* 读不到按空处理 */ }
   let body = null;
   if (text.trim()) { try { body = JSON.parse(text); } catch { body = null; } }
-  clearTimeout(timer);
   return { status: res.status, body, text: text.trim(), contentType: res.headers.get('content-type') || '' };
 }
 

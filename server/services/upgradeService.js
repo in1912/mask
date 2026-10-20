@@ -66,6 +66,24 @@ function diskFileVersion(p) { // 从包内 package.json 文本取版本（不落
   try { return JSON.parse(p.toString('utf8')).version || ''; } catch { return ''; }
 }
 
+// 版本比较必须按数字段来：字符串比较下 "0.4.10" < "0.4.9"，0.4.10 的包会被误判成降级。
+// 返回 -1/0/1；预发布后缀（-beta.1）只在数字相同时参与比较，按字符串。
+function cmpVersion(a, b) {
+  const split = (v) => String(v || '').trim().replace(/^v/i, '').split('-');
+  const [na, pa = ''] = split(a);
+  const [nb, pb = ''] = split(b);
+  const xs = na.split('.').map((x) => parseInt(x, 10) || 0);
+  const ys = nb.split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(xs.length, ys.length); i++) {
+    const d = (xs[i] || 0) - (ys[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  if (pa === pb) return 0;
+  if (!pa) return 1;   // 正式版 > 预发布
+  if (!pb) return -1;
+  return pa > pb ? 1 : -1;
+}
+
 // ---------- 路径安全（白名单 + 段级双重校验） ----------
 // 段级：任何形式的「跳出仓库」和「Windows 上会出事的名字」直接拒
 function validateEntryName(name) {
@@ -342,7 +360,7 @@ function doPlan(buf) {
   }
 
   const current = runningVersion();
-  const downgrade = !!(current && packedVersion && packedVersion < current);
+  const downgrade = !!(current && packedVersion && cmpVersion(packedVersion, current) < 0);
   if (downgrade) warnings.push(`这是降级（现役 ${current} → 包内 ${packedVersion}）——只有在明确回滚时才继续`);
 
   const plan = {
@@ -620,5 +638,5 @@ function statusSnapshot() {
 
 module.exports = {
   planUpgrade, applyUpgrade, listLogs, statusSnapshot, backupZipPath, pruneDist,
-  MAX_UPLOAD_MB, UpgradeError, ROOT, WEB_ROOT,
+  MAX_UPLOAD_MB, UpgradeError, ROOT, WEB_ROOT, cmpVersion,
 };

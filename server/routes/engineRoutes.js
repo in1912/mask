@@ -4,6 +4,7 @@
 const express = require('express');
 const engines = require('../engines');
 const engineSetup = require('../services/engineSetupService');
+const sidecarLauncher = require('../sidecarLauncher');
 const { toCandidates } = engines;
 
 const router = express.Router();
@@ -24,6 +25,19 @@ router.post('/setup', (req, res) => {
   }
 });
 router.get('/setup/status', (req, res) => res.json(engineSetup.status()));
+
+// 边车进程状态（v0.4.10）：在不在跑、上次退出码、日志尾——探测失败时不用进容器翻日志
+router.get('/sidecar', (req, res) => res.json(sidecarLauncher.status()));
+// 手动拉起/重试一次（本机地址才有效）
+router.post('/sidecar/start', async (req, res) => {
+  try {
+    const r = await sidecarLauncher.ensureSidecar(() => engines.getCfg().sidecar_url);
+    console.log(`[engines] 管理员 ${req.user.username} 手动拉起边车 → ${r.started ? '成功' : r.reused ? '已在运行' : '失败'}`);
+    res.json({ ...r, status: sidecarLauncher.status() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // 引擎注册表 + 当前配置 + 最近探测结果（设置页「引擎」tab 数据源）
 router.get('/', (req, res) => {
