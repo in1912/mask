@@ -7,9 +7,12 @@ FROM golang:1.23-bookworm AS godlp
 WORKDIR /src
 COPY vendor/godlp-cli ./vendor/godlp-cli
 COPY vendor/engines-src/godlp ./vendor/engines-src/godlp
-RUN cd vendor/godlp-cli \
+# go build 不会创建 -o 的父目录，先 mkdir；结尾 test 兜住「构建成功但没产物」
+RUN mkdir -p /out \
+ && cd vendor/godlp-cli \
  && CGO_ENABLED=0 GOFLAGS=-mod=mod GOPROXY=https://goproxy.cn,direct GOSUMDB=off \
-    go build -trimpath -ldflags '-s -w' -o /out/godlp-cli .
+    go build -trimpath -ldflags '-s -w' -o /out/godlp-cli . \
+ && test -x /out/godlp-cli
 
 # ---------- 构建阶段 2：sensitive-word CLI（release 17，运行镜像用 JRE 17） ----------
 FROM maven:3.9-eclipse-temurin-17 AS sensitive-word
@@ -19,7 +22,8 @@ COPY vendor/sensitive-word-workspace ./vendor/sensitive-word-workspace
 RUN mkdir -p /root/.m2 /src/vendor/sensitive-word \
  && printf '%s\n' '<settings><mirrors><mirror><id>aliyun</id><mirrorOf>central</mirrorOf><url>https://maven.aliyun.com/repository/public</url></mirror></mirrors></settings>' > /root/.m2/settings.xml \
  && cd vendor/sensitive-word-workspace \
- && mvn -B -q -Dmaven.repo.local=/root/.m2/repository package
+ && mvn -B -q -Dmaven.repo.local=/root/.m2/repository package \
+ && test -f /src/vendor/sensitive-word/sensitive-word-cli.jar
 
 # ---------- 运行镜像 ----------
 FROM node:22-bookworm-slim
