@@ -22,13 +22,9 @@ const CFG_KEY = 'mask_engines';
 
 // 项目内自带运行时（scripts/engines-setup.mjs 首次启动铺好）：命令默认指向项目内路径，
 // 不要求用户改 PATH，也不碰系统安装的 Java/Go。
-const ROOT = path.resolve(__dirname, '..', '..');
-const VENDOR = path.join(ROOT, 'vendor');
-const IS_WIN = process.platform === 'win32';
-const GODLP_BIN = path.join(VENDOR, 'godlp', IS_WIN ? 'godlp-cli.exe' : 'godlp-cli');
-const JAVA_BIN = path.join(VENDOR, 'jdk', 'bin', IS_WIN ? 'java.exe' : 'java');
-const SW_JAR = path.join(VENDOR, 'sensitive-word', 'sensitive-word-cli.jar');
-const SW_CMD = `"${JAVA_BIN}" -cp "${SW_JAR}" local.mask.SensitiveWordCli`;
+// 默认命令在「取用那一刻」才解析（见 paths.js 的 getter 说明）：
+// vendor/ 被 noexec 挂载时安装器会把可执行文件放进 .engines，设置页不改命令也能用。
+const enginePaths = require('./paths');
 
 // ---------- 实体类型 → 内置规则 key ----------
 const TYPE_MAP = {
@@ -67,14 +63,14 @@ const ENGINES = [
   {
     id: 'godlp', name: 'godlp', kind: 'stdio', hidden: false,
     vendor: '字节跳动 ByteDance', home: 'https://gitee.com/bytedance/godlp', license: 'Apache-2.0',
-    desc: 'Go 实现的数据脱敏 SDK。项目自带 CLI 包装（stdin 文本 → stdout 实体 JSON），首次启动自动编译到 vendor/godlp。',
-    defCommand: `"${GODLP_BIN}"`,
+    desc: 'Go 实现的数据脱敏 SDK。项目自带 CLI 包装（stdin 文本 → stdout 实体 JSON），首次启动自动编译（默认 vendor/godlp；vendor 不能执行时放 .engines/godlp）。',
+    get defCommand() { return enginePaths.godlpCommand(); },
   },
   {
     id: 'sensitive_word', name: 'sensitive-word', kind: 'stdio', hidden: false,
     vendor: 'houbb', home: 'https://github.com/houbb/sensitive-word', license: 'Apache-2.0',
     desc: 'Java 中文敏感词库（百万级词库，词组识别强）。项目自带 JDK 与 CLI 包装，首次启动自动构建 jar，无需系统装 Java。',
-    defCommand: SW_CMD,
+    get defCommand() { return enginePaths.sensitiveWordCommand(); },
   },
   {
     id: 'presidio', name: 'Presidio', kind: 'sidecar', hidden: false,

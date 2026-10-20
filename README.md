@@ -70,7 +70,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
 
-## 功能（v0.4.4）
+## 功能（v0.4.5）
 
 | 菜单 | 说明 |
 |---|---|
@@ -125,7 +125,9 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 **v0.4.3 修了两个只在生产真装时才暴露的问题**：①解出的 JDK/Go/Maven 被搬到项目根（`/app/jdk`）而不是 `vendor/` 下，装完永远探测不到——这是 v0.3.2 起就存在、本机因 `vendor/` 早已存在而从未走到的分支；②Docker 里把 `vendor/` 挂成宿主机卷时，从镜像层 `rename` 到挂载卷会 `EXDEV: cross-device link`，现在自动退回复制，挂载点本身删不掉时改为清空内容。另外，预检原先要求包内前端目录**严格比现役新**，纯服务端升级（前端没重构建、dist 同名）会被误判为「白升」拒收；v0.4.3 改为**允许相等、只拒绝更旧**，落盘时同名文件按内容跳过。另外，误传三端分发包（外面套着 `面具-<版本>-<平台>/` 目录）现在会被直接认出来，提示「这是分发包、升级请用 -upgrade.zip」，不再刷 148 条非 ASCII 报错。下载请求补了 User-Agent（Adoptium 对无 UA 请求回 403），Linux JDK 多一个清华镜像兜底。**v0.4.4 让安装器不再依赖镜像里的源码**：旧镜像（或把整个 `vendor/` 挂成宿主机卷）里没有 `godlp-cli` / `sensitive-word-workspace`，按钮会卡在「找不到 pom.xml」。现在这两份源码（共 40 个文件、约 260KB）以 base64 zip 内置在 `server/services/engineSources.js`，安装器发现缺失时自动铺到 `vendor/` 下再构建；本地已有源码时一个字节都不动。源码改动后要重跑 `node scripts/build-engine-sources.mjs`，`check-setup` 的 V2 会比对两边是否一致，忘了重跑直接红。另外 Maven 直连失败时会自动改用阿里云镜像重试。
 
-**开发机仍没有 Docker，修复后没有在真容器里把整个按钮流程重跑一遍**——生产那次的实测证据只到「JDK 下载成功、搬移报 EXDEV」。
+**v0.4.5 修「vendor 挂载点不能执行程序」**：生产把宿主机目录挂到 `/app/vendor`，挂载点带 `noexec`，于是 JDK/Go/Maven 明明解压好了，Maven 一启动就 `spawnSync /app/vendor/maven/bin/mvn EACCES`——文件在、可读、可写，就是不能执行；`vendor` 里的 `java`、`go`、编译出来的 `godlp-cli` 都会栽在同一个地方，逐个 `chmod` 没用。现在安装器先写一个最小脚本到 `vendor/` 真跑一次探测：能执行就维持原样；不能执行就把**可执行的部分**（JDK/Go/Maven、`godlp-cli`）装到项目内 `.engines/`（可用 `MASK_ENGINES_HOME` 指定别处），并在 `vendor/.engines-home.json` 记下来。引擎默认命令在取用那一刻解析这份标记，所以不需要在设置页手改命令，也不用重启服务。`vendor` 里上一轮已经解压好的 JDK/Go/Maven 会直接复制过去，不重新下载；jar 只需要被 java 读、不需要执行位，继续留在 `vendor/sensitive-word/`。项目目录也写不进去时退到系统临时目录，并在日志里说清楚「容器重建会丢」。`.engines/` 不在镜像层，容器重建就没了——想留住它，把 `./.engines:/app/.engines` 挂成卷（别挂在 noexec 的共享盘上）。
+
+**开发机仍没有 Docker，以上生产问题都是靠线上日志定位、在本机用等价的目录布局与强制降级开关复现**：`check-setup` 的 W 段覆盖「探测可执行 → 降级目录 → 标点文件 → 引擎默认命令跟着换 → 标点文件写坏退回 vendor」。真容器里的完整按钮流程仍未实跑。
 
 | 引擎 | 接入方式 | 说明 |
 |---|---|---|
@@ -171,7 +173,7 @@ v0.4.1+ 镜像已内置 godlp 与 sensitive-word，不需要再装命令行引�
 
 ```bash
 npm run check
-# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 25 = 382 项
+# engine 54 + server 39 + chat 26 + files 59 + batch 55 + upgrade 63 + ssl 16 + engines 45 + setup 33 = 390 项
 node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在跑（唯一覆盖重启链路的脚本）
 ```
 
@@ -210,5 +212,6 @@ node scripts/verify-upgrade-restart.mjs   # 升级→自我接替→新版真在
 | `MASK_PYTHON` | 装配/边车使用的 Python 命令（默认 Windows `python`，其他 `python3`） |
 | `MASK_ENGINE_SETUP_LOG_DIR` | 「一键安装依赖」日志目录（默认 `Logs/`；自检指向临时目录） |
 | `MASK_ENGINES_SETUP_SCRIPT` | 安装器路径覆盖（自检用，勿在生产手工设置） |
+| `MASK_ENGINES_HOME` | 可执行引擎的运行时目录（默认 `vendor/`；`vendor` 不能执行时安装器自动用 `.engines/`）。手工指定时必须是普通磁盘目录，别指向 noexec 挂载点 |
 | `MASK_NO_SIDECAR=1` | 不自动拉起边车（自检脚本用；手动管理边车时也可用） |
 | `MASK_NO_SETUP=1` | 启动时跳过引擎装配检查（已装好且想快速启动时用） |

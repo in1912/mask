@@ -1,5 +1,5 @@
 'use strict';
-// 外部脱敏引擎装配器（v0.4.2）：首次启动安装，之后只做存在性检查。
+// 外部脱敏引擎装配器（v0.4.5）：首次启动安装，之后只做存在性检查。
 //
 // 为什么放在 server/ 下而不是 scripts/：在线升级白名单只允许 server/**.js、web/dist、package.json，
 // 装在 scripts/ 的安装器进不了升级包——生产上点了按钮也只会跑旧脚本。放在 server/ 里升级就能带过去。
@@ -20,6 +20,7 @@
 //       macOS 目前只装 Python 引擎（JDK/Go/Maven 的 mac 路径未实机验证，不冒充支持）。
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const {
@@ -28,6 +29,7 @@ const {
 
 const { extractZip } = require('./zipService');
 const EMBEDDED_SRC = require('./engineSources');
+const { MARKER: ENGINES_HOME_MARKER } = require('../engines/paths');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const P = (...x) => path.join(ROOT, ...x);
@@ -38,6 +40,14 @@ const PY = process.env.MASK_PYTHON || (IS_WIN ? 'python' : 'python3');
 const EXE = IS_WIN ? '.exe' : '';
 // Linux/Windows：命令行引擎可自动构建；macOS 只装 Python（见文件头）
 const CLI_SUPPORTED = IS_WIN || IS_LINUX;
+
+const VENDOR = P('vendor');
+// vendor 挂载点不能执行时，运行时放这里（MASK_TEST_ENGINES_FALLBACK 只给自检用，避免动项目里的真目录）
+const FALLBACK_HOME = process.env.MASK_TEST_ENGINES_FALLBACK
+  ? path.resolve(process.env.MASK_TEST_ENGINES_FALLBACK)
+  : P('.engines');
+let ENGINES_HOME = VENDOR;          // main() 里探测后决定
+let VENDOR_TARGETS = {};            // jdk / go / maven，跟着 ENGINES_HOME
 
 let ONLY = 'all';
 let FORCE = false;
@@ -123,13 +133,61 @@ function moveTree(src, dest) {
   }
 }
 
-// destAbs 必须是完整绝对路径（vendor/jdk、vendor/go、vendor/maven）——
+// destAbs 必须是完整绝对路径（<home>/jdk、<home>/go、<home>/maven）——
 // v0.3.2~v0.4.2 曾把只给名字的目标拼到项目根（解到 /app/jdk），生产第一次真装才炸。
-const VENDOR_TARGETS = {
-  jdk: P('vendor', 'jdk'),
-  go: P('vendor', 'go'),
-  maven: P('vendor', 'maven'),
-};
+function vendorTargets(home) {
+  return {
+    jdk: path.join(home, 'jdk'),
+    go: path.join(home, 'go'),
+    maven: path.join(home, 'maven'),
+  };
+}
+
+// ---------- 0. 运行时目录探测（v0.4.5） ----------
+// 生产实测：宿主机把目录挂到 /app/vendor，挂载点带 noexec，mvn 直接 EACCES——
+// 文件在、可读、可写，就是不能执行。vendor 里的 java/go/godlp 也全都会栽在这里。
+// 探测方式：在目标目录写一个最小 shell 脚本（0755）并真跑一次；写不了或跑不起来都算不能用。
+// Windows 没有执行位/noexec 这回事，直接认为可用。
+function canExecIn(dir) {
+  if (IS_WIN) return true;
+  try {
+    mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.exec-probe-${process.pid}.sh`);
+    writeFileSync(probe, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const r = spawnSync(probe, [], { timeout: 5000, stdio: 'ignore' });
+    rmSync(probe, { force: true });
+    return !r.error && r.status === 0;
+  } catch (e) {
+    log(`执行权限探测出错（${dir}）：${e.message}`);
+    return false;
+  }
+}
+
+function resolveEnginesHome() {
+  if (process.env.MASK_ENGINES_HOME) {
+    const h = path.resolve(process.env.MASK_ENGINES_HOME);
+    log(`引擎运行时目录：${h}（MASK_ENGINES_HOME 指定）`);
+    if (!canExecIn(h)) log(`注意：${h} 里的程序也不能执行，装完仍会 EACCES——请换一个普通磁盘目录`);
+    return h;
+  }
+  // MASK_TEST_VENDOR_NOEXEC=1 让自检能稳定走到降级分支（本机造不出 noexec 挂载）
+  if (process.env.MASK_TEST_VENDOR_NOEXEC !== '1' && canExecIn(VENDOR)) return VENDOR;
+  log('vendor/ 里的程序不能执行（常见原因：宿主机卷以 noexec 挂进来，或文件系统不存执行位）');
+  log(`可执行的部分（JDK/Go/Maven/godlp）改放到 ${FALLBACK_HOME}；jar 与源码留在 vendor/ 不影响使用。`);
+  log('vendor 里旧的同名目录不会再被使用，也不会自动删除（确认没用可手工删）。');
+  // 项目目录本身不可写时（例如容器以非 root 跑且 /app 只读）退到系统临时目录
+  for (const cand of [FALLBACK_HOME, path.join(os.tmpdir(), 'mask-engines')]) {
+    try {
+      mkdirSync(cand, { recursive: true });
+      if (!canExecIn(cand)) { log(`${cand} 里的程序也不能执行，换下一个位置`); continue; }
+      if (cand !== FALLBACK_HOME) log(`项目目录写不进去，运行时改放 ${cand}（容器重建会丢，建议挂载或设 MASK_ENGINES_HOME）`);
+      return cand;
+    } catch (e) {
+      log(`${cand} 不可用：${e.message}`);
+    }
+  }
+  die('找不到既能写又能执行程序的目录——请设 MASK_ENGINES_HOME 指向普通磁盘目录后重试');
+}
 
 function moveInnerDir(tmp, destAbs) {
   const items = readdirSync(tmp).filter((n) => statSync(path.join(tmp, n)).isDirectory());
@@ -199,6 +257,22 @@ function findSystemJdk() {
 
 let BUILD_JAVA_HOME = P('vendor', 'jdk'); // Maven 构建用
 
+// 降级到 .engines 时，vendor 里往往已经有一份「解压好了、只是不能执行」的工具链
+// （上一次安装其实已经把包下载并解开了）。复制过去比重新下一遍（JDK ~180MB / Go ~70MB）快得多。
+function adoptVendorCopy(rel, destAbs) {
+  const src = path.join(VENDOR, rel);
+  if (!existsSync(src) || !readdirSync(src).length) return false;
+  log(`复用 vendor/${rel} 里已解压的那份，复制到 ${destAbs}…`);
+  try {
+    emptyDirOrRemove(destAbs);
+    fs.cpSync(src, destAbs, { recursive: true });
+    return true;
+  } catch (e) {
+    log(`复制失败（${e.code || e.message}），改为重新下载`);
+    return false;
+  }
+}
+
 // Linux arm64 的 Adoptium/华为镜像分别换架构段
 function urlsForJdk(urls) {
   if (IS_WIN || ARCH !== 'arm64') return urls;
@@ -206,17 +280,24 @@ function urlsForJdk(urls) {
 }
 
 function ensureJdk() {
-  if (existsSync(P('vendor', 'jdk', 'bin', `java${EXE}`)) && !FORCE) {
-    log('JDK：已就绪'); BUILD_JAVA_HOME = P('vendor', 'jdk'); return;
+  if (existsSync(path.join(VENDOR_TARGETS.jdk, 'bin', `java${EXE}`)) && !FORCE) {
+    log('JDK：已就绪'); BUILD_JAVA_HOME = VENDOR_TARGETS.jdk; return;
+  }
+  if (ENGINES_HOME !== VENDOR && !FORCE
+    && adoptVendorCopy('jdk', VENDOR_TARGETS.jdk)
+    && existsSync(path.join(VENDOR_TARGETS.jdk, 'bin', `java${EXE}`))) {
+    BUILD_JAVA_HOME = VENDOR_TARGETS.jdk;
+    log(`JDK：已从 vendor 复制到 ${VENDOR_TARGETS.jdk}`);
+    return;
   }
   const sys = findSystemJdk();
   if (sys && !FORCE) {
-    mkdirSync(P('vendor', 'jdk', 'bin'), { recursive: true });
-    const link = P('vendor', 'jdk', 'bin', 'java');
+    mkdirSync(path.join(VENDOR_TARGETS.jdk, 'bin'), { recursive: true });
+    const link = path.join(VENDOR_TARGETS.jdk, 'bin', 'java');
     rmSync(link, { force: true });
     symlinkSync(sys.java, link);
     BUILD_JAVA_HOME = sys.home;
-    log(`JDK：使用系统安装（${sys.home}），已链接到 vendor/jdk/bin/java`);
+    log(`JDK：使用系统安装（${sys.home}），已链接到 ${link}`);
     return;
   }
   const zip = P('vendor', 'dl', IS_WIN ? 'jdk21.zip' : 'jdk21.tar.gz');
@@ -231,13 +312,19 @@ function ensureJdk() {
   }
   extractArchive(zip, P('vendor', 'tmp-jdk'));
   moveInnerDir(P('vendor', 'tmp-jdk'), VENDOR_TARGETS.jdk);
-  BUILD_JAVA_HOME = P('vendor', 'jdk');
-  log('JDK：已解压到 vendor/jdk');
+  BUILD_JAVA_HOME = VENDOR_TARGETS.jdk;
+  log(`JDK：已解压到 ${VENDOR_TARGETS.jdk}`);
 }
 
 // ---------- 4. Go ----------
 function ensureGo() {
-  if (existsSync(P('vendor', 'go', 'bin', `go${EXE}`)) && !FORCE) { log('Go：已就绪'); return; }
+  if (existsSync(path.join(VENDOR_TARGETS.go, 'bin', `go${EXE}`)) && !FORCE) { log('Go：已就绪'); return; }
+  if (ENGINES_HOME !== VENDOR && !FORCE
+    && adoptVendorCopy('go', VENDOR_TARGETS.go)
+    && existsSync(path.join(VENDOR_TARGETS.go, 'bin', `go${EXE}`))) {
+    log(`Go：已从 vendor 复制到 ${VENDOR_TARGETS.go}`);
+    return;
+  }
   const zip = P('vendor', 'dl', IS_WIN ? 'go.zip' : 'go.tar.gz');
   if (!existsSync(zip)) {
     const goArch = ARCH === 'arm64' ? 'arm64' : 'amd64';
@@ -250,12 +337,18 @@ function ensureGo() {
   }
   extractArchive(zip, P('vendor', 'tmp-go'));
   moveInnerDir(P('vendor', 'tmp-go'), VENDOR_TARGETS.go);
-  log('Go：已解压到 vendor/go');
+  log(`Go：已解压到 ${VENDOR_TARGETS.go}`);
 }
 
 // ---------- 5. Maven ----------
 function ensureMaven() {
-  if (existsSync(P('vendor', 'maven', 'bin', IS_WIN ? 'mvn.cmd' : 'mvn')) && !FORCE) { log('Maven：已就绪'); return; }
+  if (existsSync(path.join(VENDOR_TARGETS.maven, 'bin', IS_WIN ? 'mvn.cmd' : 'mvn')) && !FORCE) { log('Maven：已就绪'); return; }
+  if (ENGINES_HOME !== VENDOR && !FORCE
+    && adoptVendorCopy('maven', VENDOR_TARGETS.maven)
+    && existsSync(path.join(VENDOR_TARGETS.maven, 'bin', IS_WIN ? 'mvn.cmd' : 'mvn'))) {
+    log(`Maven：已从 vendor 复制到 ${VENDOR_TARGETS.maven}`);
+    return;
+  }
   const zip = P('vendor', 'dl', IS_WIN ? 'maven.zip' : 'maven.tar.gz');
   if (!existsSync(zip)) {
     const ext = IS_WIN ? 'zip' : 'tar.gz';
@@ -266,7 +359,7 @@ function ensureMaven() {
   }
   extractArchive(zip, P('vendor', 'tmp-maven'));
   moveInnerDir(P('vendor', 'tmp-maven'), VENDOR_TARGETS.maven);
-  log('Maven：已解压到 vendor/maven');
+  log(`Maven：已解压到 ${VENDOR_TARGETS.maven}`);
 }
 
 // ---------- 5.5 构建源码（镜像里没有时用内置副本铺开） ----------
@@ -308,15 +401,27 @@ const VENDOR_MOUNT_HINT = '——内置源码副本也没能铺开，检查 vend
   + '实在不行就重建镜像（v0.4.1+ 镜像已内置两个命令行引擎），见 docker-compose.yml。';
 
 function ensureSensitiveWord() {
-  const jar = P('vendor', 'sensitive-word', 'sensitive-word-cli.jar');
-  if (existsSync(jar) && !FORCE) { log('sensitive-word：已就绪'); return; }
-  if (!existsSync(P('vendor', 'sensitive-word-workspace', 'pom.xml'))) {
+  const jarHome = path.join(ENGINES_HOME, 'sensitive-word', 'sensitive-word-cli.jar');
+  const jarVendor = path.join(VENDOR, 'sensitive-word', 'sensitive-word-cli.jar');
+  // jar 只被 java 读，不需要执行位：vendor 里已有的（镜像构建产物）照样能用
+  if ((existsSync(jarHome) || existsSync(jarVendor)) && !FORCE) { log('sensitive-word：已就绪'); return; }
+  const srcWs = path.join(VENDOR, 'sensitive-word-workspace');
+  if (!existsSync(path.join(srcWs, 'pom.xml'))) {
     die(`找不到 vendor/sensitive-word-workspace/pom.xml${VENDOR_MOUNT_HINT}`);
   }
-  mkdirSync(path.dirname(jar), { recursive: true });
-  const mvn = P('vendor', 'maven', 'bin', IS_WIN ? 'mvn.cmd' : 'mvn');
+  // vendor 不能执行时连带把构建目录也放出去：mvn 会在工作区里写 target/，
+  // 而 pom 的 shade 输出固定写到工作区上一级的 sensitive-word/。
+  let ws = srcWs;
+  if (ENGINES_HOME !== VENDOR) {
+    ws = path.join(ENGINES_HOME, 'build', 'sensitive-word-workspace');
+    rmSync(ws, { recursive: true, force: true });
+    fs.cpSync(srcWs, ws, { recursive: true, filter: (s) => path.basename(s) !== 'target' });
+    log(`构建目录改到 ${ws}（vendor 里的程序不能执行）`);
+  }
+  mkdirSync(path.dirname(jarHome), { recursive: true });
+  const mvn = path.join(VENDOR_TARGETS.maven, 'bin', IS_WIN ? 'mvn.cmd' : 'mvn');
   const args = ['-B', '-q', `-Dmaven.repo.local=${P('vendor', 'maven-repo')}`, 'package'];
-  const opts = { cwd: P('vendor', 'sensitive-word-workspace'), shell: IS_WIN,
+  const opts = { cwd: ws, shell: IS_WIN,
     env: { ...process.env, JAVA_HOME: BUILD_JAVA_HOME } };
   try {
     run(mvn, args, opts);
@@ -332,29 +437,61 @@ function ensureSensitiveWord() {
     ].join(''));
     run(mvn, [...args, '-s', settings], opts);
   }
-  if (!existsSync(jar)) die('sensitive-word 构建完成但没找到 jar');
+  // shade 的输出位置跟着工作区走；统一落到 runtime 目录，engine/paths.js 会先找那里
+  const built = path.join(path.dirname(ws), 'sensitive-word', 'sensitive-word-cli.jar');
+  if (existsSync(built) && built !== jarHome) { fs.copyFileSync(built, jarHome); }
+  if (!existsSync(jarHome)) {
+    if (existsSync(jarVendor)) fs.copyFileSync(jarVendor, jarHome);
+    else die('sensitive-word 构建完成但没找到 jar');
+  }
   log('sensitive-word：jar 已生成');
 }
 
 // ---------- 7. godlp CLI ----------
 function ensureGodlp() {
-  const exe = P('vendor', 'godlp', `godlp-cli${EXE}`);
+  // 二进制必须能执行：定位在 ENGINES_HOME 下（vendor 不能执行时就是 .engines/godlp）
+  const exe = path.join(ENGINES_HOME, 'godlp', `godlp-cli${EXE}`);
   if (existsSync(exe) && !FORCE) { log('godlp：已就绪'); return; }
   if (!existsSync(P('vendor', 'godlp-cli', 'go.mod'))) {
     die(`找不到 vendor/godlp-cli/go.mod${VENDOR_MOUNT_HINT}`);
   }
+  mkdirSync(path.dirname(exe), { recursive: true });
   // 容器里没有 gcc：必须静态编译（CGO_ENABLED=0），否则 build 会卡在 gcc 缺失
   const env = { ...process.env, GOPROXY: 'https://goproxy.cn,direct', GOSUMDB: 'off', GO111MODULE: 'on', CGO_ENABLED: '0' };
-  const go = P('vendor', 'go', 'bin', `go${EXE}`);
+  const go = path.join(VENDOR_TARGETS.go, 'bin', `go${EXE}`);
   run(go, ['mod', 'tidy'], { cwd: P('vendor', 'godlp-cli'), env });
   run(go, ['build', '-trimpath', '-ldflags', '-s -w', '-o', exe, '.'], { cwd: P('vendor', 'godlp-cli'), env });
-  log('godlp：可执行文件已生成');
+  log(`godlp：可执行文件已生成（${exe}）`);
 }
 
 function main() {
   log(`平台 ${process.platform}/${ARCH}，安装范围 ${ONLY}`);
   if (!CLI_SUPPORTED) {
     log('注意：macOS 目前只自动装配 Python 引擎；godlp/sensitive-word 请手动装 JDK+Go+Maven 后在设置页改命令。');
+  }
+
+  if (CLI_SUPPORTED) {
+    ENGINES_HOME = resolveEnginesHome();
+    VENDOR_TARGETS = vendorTargets(ENGINES_HOME);
+    // 让 server/engines/paths.js 知道该去哪个目录找可执行文件（没降级就不留标点文件）
+    if (ENGINES_HOME === VENDOR) {
+      rmSync(ENGINES_HOME_MARKER, { force: true });
+      rmSync(P('.engines-home.json'), { force: true });
+    } else {
+      const body = JSON.stringify({
+        home: ENGINES_HOME, reason: 'vendor-not-executable', updated_at: new Date().toISOString(),
+      }, null, 2);
+      try {
+        writeFileSync(ENGINES_HOME_MARKER, body);
+      } catch (e) {
+        // vendor 只读时标点文件写不进去，放到项目根（paths.js 两个位置都会看）
+        log(`标点文件写不进 ${ENGINES_HOME_MARKER}（${e.code || e.message}），改写到项目根`);
+        writeFileSync(P('.engines-home.json'), body);
+      }
+    }
+  } else {
+    ENGINES_HOME = VENDOR;
+    VENDOR_TARGETS = vendorTargets(VENDOR);
   }
 
   mkdirSync(P('vendor', 'dl'), { recursive: true });
@@ -378,10 +515,14 @@ function main() {
     }
   }
 
-  writeFileSync(P('vendor', '.engines-ready.json'), JSON.stringify({
+  const ready = {
     ready_at: new Date().toISOString(), platform: process.platform, arch: ARCH, scope: ONLY,
+    engines_home: ENGINES_HOME,
     python: P('python', 'vendor'), models: P('python', 'models'),
-  }, null, 2));
+  };
+  writeFileSync(P('vendor', '.engines-ready.json'), JSON.stringify(ready, null, 2));
+  // 降级时运行时目录自己也留一份：容器重建后 vendor 卷还在、.engines 没了，一眼能看出来
+  if (ENGINES_HOME !== VENDOR) writeFileSync(path.join(ENGINES_HOME, '.engines-ready.json'), JSON.stringify(ready, null, 2));
   log('全部就绪。');
 }
 
@@ -406,8 +547,12 @@ function runCli(argv = process.argv.slice(2)) {
 
 if (require.main === module) process.exit(runCli(process.argv.slice(2)));
 
-// _moveInnerDir 只给自检用（验证目标目录正确、EXDEV 复制分支可用）
+// 以下 `_*` 只给自检用（目标目录、EXDEV 复制分支、noexec 降级、内置源码铺开）
 module.exports = {
-  runCli, main, _moveInnerDir: moveInnerDir, _vendorTargets: VENDOR_TARGETS,
+  runCli, main, _moveInnerDir: moveInnerDir,
+  _vendorTargetsFor: vendorTargets,
+  _enginesHome: () => ENGINES_HOME,
+  _resolveEnginesHome: resolveEnginesHome,
+  _canExecIn: canExecIn,
   _ensureSources: ensureSources, _sourcesReady: sourcesReady,
 };

@@ -21,6 +21,10 @@ vendor/dl/
 vendor/sensitive-word/
 vendor/godlp/godlp-cli.exe
 vendor/.engines-ready.json
+# vendor 不能执行（noexec 挂载）时的运行时目录与标点文件
+.engines/
+.engines-home.json
+vendor/.engines-home.json
 
 # D:\脱敏 其他工具源码体积大，不入库；只保留面具真正要构建的两份源码
 vendor/engines-src/*

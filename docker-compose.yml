@@ -27,3 +27,8 @@ services:
       # - ./vendor/dl:/app/vendor/dl
       # - ./vendor/godlp:/app/vendor/godlp
       # - ./vendor/sensitive-word:/app/vendor/sensitive-word
+      # vendor 挂在不允许执行程序的盘上（noexec / 共享盘）时，安装器会把 JDK/Go/Maven
+      # 与 godlp-cli 放到 /app/.engines；想让它活过容器重建就单独挂这个目录
+      # （同样别挂在 noexec 的共享盘上，否则问题照旧）：
+      # - ./.engines:/app/.engines
+      # 也可以直接指定别处：environment 里加 MASK_ENGINES_HOME=/data/engines

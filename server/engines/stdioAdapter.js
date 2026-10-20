@@ -63,9 +63,11 @@ function findExecutable(exe) {
 
 function missingCommandError(exe) {
   let hint = MISSING_HINTS[exe.toLowerCase()] || '';
-  // 项目自带 vendor/ 路径缺失 ≠ 用户没装 Java：说清楚是「这份安装没装配这个引擎」
-  const VENDOR = path.resolve(__dirname, '..', '..', 'vendor') + path.sep;
-  if (/[\\/]/.test(exe) && path.resolve(exe).startsWith(VENDOR)) {
+  // 项目自带 vendor/（或 vendor 不能执行时的 .engines/）路径缺失 ≠ 用户没装 Java：
+  // 说清楚是「这份安装没装配这个引擎」
+  const ROOTSEP = path.resolve(__dirname, '..', '..') + path.sep;
+  const SELF_DIRS = [path.join(ROOTSEP, 'vendor') + path.sep, path.join(ROOTSEP, '.engines') + path.sep];
+  if (/[\\/]/.test(exe) && SELF_DIRS.some((d) => path.resolve(exe).startsWith(d))) {
     hint = process.platform === 'win32'
       ? '这是项目自带的引擎路径，但本安装里还没装配它（Windows 首次启动会自动编译；也可删掉 vendor/.engines-ready.json 后重启重装）。'
       : '这是项目自带的引擎路径，但当前安装里没有它：Docker 请用 v0.4.1 及以上的镜像（镜像内已构建 godlp 与 sensitive-word）；macOS 目前只自动装配 Python 引擎。内置规则引擎与 Python 引擎不受影响。';

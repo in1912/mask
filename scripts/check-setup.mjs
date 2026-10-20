@@ -4,7 +4,7 @@
 //       进度与日志采集 / 成功与失败退出码 / 结束后可再次触发 / 日志落盘 / 真实脚本参数校验
 // 用 MASK_ENGINES_SETUP_SCRIPT 把安装器换成临时 mock——自检绝不联网下载 GB 级依赖。
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -136,10 +136,12 @@ try {
   ok('T2 非法值不产生任何写入（未开始下载）', !/下载/.test((badScope.stdout || '') + (badScope.stderr || '')));
 
   console.log('U. 解包目录搬移（v0.4.3 生产 EXDEV 事故回归）');
-  const { _moveInnerDir, _vendorTargets } = require(path.join(ROOT, 'server', 'services', 'enginesInstaller.js'));
-  ok('U1 目标目录都在 vendor/ 下（不能拼到项目根）',
-    Object.values(_vendorTargets).every((d) => path.dirname(d) === path.join(ROOT, 'vendor')),
-    JSON.stringify(_vendorTargets));
+  const installerPath = path.join(ROOT, 'server', 'services', 'enginesInstaller.js');
+  const { _moveInnerDir, _vendorTargetsFor } = require(installerPath);
+  const targetsAtVendor = _vendorTargetsFor(path.join(ROOT, 'vendor'));
+  ok('U1 目标目录都在运行时目录下（不能拼到项目根）',
+    Object.values(targetsAtVendor).every((d) => path.dirname(d) === path.join(ROOT, 'vendor')),
+    JSON.stringify(targetsAtVendor));
 
   const mkTmp = () => {
     const t = mkdtempSync(path.join(tmpdir(), 'mask-move-'));
@@ -192,6 +194,79 @@ try {
       && existsSync(path.join(vdir, 'engines-src', 'godlp', 'go.mod'))
       && existsSync(path.join(vdir, 'sensitive-word-workspace', 'src', 'main', 'java', 'local', 'mask', 'SensitiveWordCli.java')));
   } finally { rmSync(vdir, { recursive: true, force: true }); }
+
+  console.log('W. 运行时目录降级（v0.4.5 生产 noexec 挂载 EACCES 事故回归）');
+  const { _canExecIn } = require(installerPath);
+  const execDir = mkdtempSync(path.join(tmpdir(), 'mask-exec-'));
+  try {
+    const can = _canExecIn(execDir);
+    // Windows 没有执行位/noexec，恒 true；Linux 上真写脚本跑一次
+    ok('W1 普通目录判定为可执行', can === true, `canExecIn=${can}`);
+    ok('W2 探测脚本用完即删', readdirSync(execDir).length === 0, readdirSync(execDir).join(','));
+  } finally { rmSync(execDir, { recursive: true, force: true }); }
+
+  const exe = process.platform === 'win32' ? '.exe' : '';
+  const restOf = (script, env) => {
+    const r = spawnSync(process.execPath, ['-e', script], {
+      encoding: 'utf8', cwd: ROOT,
+      env: { ...process.env, MASK_ENGINES_HOME: '', MASK_ENGINES_MARKER: '', ...env },
+    });
+    const line = (r.stdout || '').trim().split(/\r?\n/).pop() || '';
+    try { return JSON.parse(line); } catch { return { parse_error: line, stderr: (r.stderr || '').slice(-400) }; }
+  };
+
+  // 模拟 vendor 不能执行：安装器应把 JDK/Go/Maven 目标挪到降级目录，并真的建出来
+  const fb = path.join(mkdtempSync(path.join(tmpdir(), 'mask-fb-')), 'engines');
+  try {
+    const r = restOf(`
+      const m = require(${JSON.stringify(installerPath)});
+      const fs = require('node:fs');
+      const h = m._resolveEnginesHome();
+      console.log(JSON.stringify({ h, targets: m._vendorTargetsFor(h), created: fs.existsSync(h) }));
+    `, { MASK_TEST_VENDOR_NOEXEC: '1', MASK_TEST_ENGINES_FALLBACK: fb });
+    ok('W3 vendor 不能执行时降级到备用目录',
+      r.h === fb && r.created === true, JSON.stringify(r));
+    ok('W4 降级后三个工具链目标跟着走',
+      r.targets && r.targets.jdk === path.join(fb, 'jdk') && r.targets.go === path.join(fb, 'go')
+      && r.targets.maven === path.join(fb, 'maven'), JSON.stringify(r.targets));
+  } finally { rmSync(path.dirname(fb), { recursive: true, force: true }); }
+
+  // 标点文件：安装器写下来之后，引擎默认命令要真的指过去（运行中的服务不需要重启改配置）
+  const mk = mkdtempSync(path.join(tmpdir(), 'mask-marker-'));
+  try {
+    const home2 = path.join(mk, 'runtime');
+    // 真项目里 vendor/ 可能已经有 jar/java（镜像构建产物），要断言「降级目录优先」，
+    // 降级目录这边也得有文件，否则解析会合理地去挑 vendor 里那份
+    mkdirSync(path.join(home2, 'godlp'), { recursive: true });
+    mkdirSync(path.join(home2, 'jdk', 'bin'), { recursive: true });
+    mkdirSync(path.join(home2, 'sensitive-word'), { recursive: true });
+    writeFileSync(path.join(home2, 'godlp', 'godlp-cli' + exe), 'x', 'utf8');
+    writeFileSync(path.join(home2, 'jdk', 'bin', 'java' + exe), 'x', 'utf8');
+    writeFileSync(path.join(home2, 'sensitive-word', 'sensitive-word-cli.jar'), 'x', 'utf8');
+    const marker = path.join(mk, 'home.json');
+    writeFileSync(marker, JSON.stringify({ home: home2 }), 'utf8');
+    const r = restOf(`
+      const p = require(${JSON.stringify(path.join(ROOT, 'server', 'engines', 'paths.js'))});
+      const e = require(${JSON.stringify(path.join(ROOT, 'server', 'engines', 'index.js'))});
+      const g = e.ENGINES.find((x) => x.id === 'godlp');
+      const s = e.ENGINES.find((x) => x.id === 'sensitive_word');
+      console.log(JSON.stringify({ home: p.home(), godlp: p.paths().godlp, cmd: g.defCommand, sw: s.defCommand }));
+    `, { MASK_ENGINES_MARKER: marker });
+    ok('W5 标点文件里的运行时目录被读出来', r.home === home2, JSON.stringify(r));
+    ok('W6 godlp 默认命令指向降级目录里的二进制',
+      r.cmd === `"${path.join(home2, 'godlp', 'godlp-cli' + exe)}"`, String(r.cmd));
+    ok('W7 sensitive-word 默认命令跟着换 java 与 jar 路径',
+      String(r.sw).includes(path.join(home2, 'jdk')) && String(r.sw).includes(path.join(home2, 'sensitive-word')),
+      String(r.sw));
+
+    // 标点文件写坏了（安装器被杀）→ 退回 vendor，不能让引擎凭空消失
+    writeFileSync(marker, '{"home": ', 'utf8');
+    const bad = restOf(`
+      const p = require(${JSON.stringify(path.join(ROOT, 'server', 'engines', 'paths.js'))});
+      console.log(JSON.stringify({ home: p.home() }));
+    `, { MASK_ENGINES_MARKER: marker });
+    ok('W8 标点文件损坏时退回 vendor', bad.home === path.join(ROOT, 'vendor'), JSON.stringify(bad));
+  } finally { rmSync(mk, { recursive: true, force: true }); }
 } finally {
   child.kill();
   await sleep(300);
