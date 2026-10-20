@@ -352,19 +352,22 @@ function acknowledgements() {
 // 三种形态：主引擎=builtin → 零开销直通；主引擎=外部 → _extOnly 完全让位；并行 → 并集合并。
 // 引擎失败如实上抛/带 stats，绝不静默当没配过。
 const builtin = require('../engine');
-async function runMask(text, cfg, persisted) {
+async function runMask(text, cfg, persisted, seed) {
   const cfgAll = getCfg();
   const ids = activeExternalEngines();
-  if (!ids.length) return builtin.encode(text, cfg, persisted);
+  // seed：调用方已经确认过的实体（批量脱敏里「前几个文件学到的对照」），
+  // 即使当前文件没有上下文也要按已知实体脱敏，否则跨文件同码只是口号。
+  const seeds = Array.isArray(seed) ? seed : [];
+  if (!ids.length) return builtin.encode(text, cfg, persisted, seeds);
   let extra = [];
   let stats = [];
   if (cfgAll.mode === 'primary') {
     // 单一外部主引擎：失败就如实抛错（没有兜底引擎在跑，不能假装脱敏成功）
     const ents = await detectWithEngine(ids[0], text);
-    extra = toCandidates(text, ents, ids[0]);
+    extra = seeds.concat(toCandidates(text, ents, ids[0]));
   } else {
     const r = await detectExternal(text);
-    extra = r.candidates;
+    extra = seeds.concat(r.candidates);
     stats = r.stats;
     const failed = stats.filter((s) => !s.ok);
     if (failed.length === ids.length && ids.length > 0) {

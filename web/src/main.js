@@ -5,6 +5,7 @@ import App from './App.vue';
 import Login from './views/Login.vue';
 import Chat from './views/Chat.vue';
 import Files from './views/Files.vue';
+import Batch from './views/Batch.vue';
 import Agent from './views/Agent.vue';
 import Rules from './views/Rules.vue';
 import History from './views/History.vue';
@@ -19,6 +20,7 @@ const router = createRouter({
     { path: '/login', component: Login },
     { path: '/', component: Chat },
     { path: '/files', component: Files },
+    { path: '/batch', component: Batch },
     { path: '/agents', component: Agent },
     { path: '/rules', component: Rules },
     { path: '/history', component: History },

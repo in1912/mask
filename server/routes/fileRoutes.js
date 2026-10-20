@@ -11,7 +11,8 @@ const { extractText } = require('../extract');
 const { loadCfg } = require('./maskRoutes')();
 const { newToken, baseUrl, shareGuide } = require('./shareUtil');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+// defParamCharset：busboy 默认按 latin1 解 multipart 文件名，中文名会变乱码；浏览器发的是 UTF-8
+const upload = multer({ storage: multer.memoryStorage(), defParamCharset: 'utf8', limits: { fileSize: 20 * 1024 * 1024 } });
 
 const RULE_ZH = Object.fromEntries(engine.RULES.map((r) => [r.key, r.zh]));
 const SIZES = [5, 15, 30, 50, 100];

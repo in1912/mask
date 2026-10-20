@@ -59,7 +59,7 @@ module.exports = function () {
   r.get('/history', (req, res) => {
     const size = [10, 20, 30, 50, 100].includes(Number(req.query.size)) ? Number(req.query.size) : 10;
     const page = Math.max(1, Number(req.query.page) || 1);
-    const scope = ['chat', 'preview', 'file'].includes(req.query.scope) ? req.query.scope : '';
+    const scope = ['chat', 'preview', 'file', 'batch'].includes(req.query.scope) ? req.query.scope : '';
     const isAdmin = req.user.role === 'admin';
     const where = [];
     const args = [];

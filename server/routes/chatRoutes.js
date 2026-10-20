@@ -10,7 +10,8 @@ const engines = require('../engines');
 const { extractText } = require('../extract');
 const { loadCfg } = require('./maskRoutes')();
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+// defParamCharset：busboy 默认按 latin1 解 multipart 文件名，中文名会变乱码；浏览器发的是 UTF-8
+const upload = multer({ storage: multer.memoryStorage(), defParamCharset: 'utf8', limits: { fileSize: 20 * 1024 * 1024 } });
 
 const SYS_BASE = '文中形如 [公司A7]、[手机K3] 或 ORG-7K2M9 的记号是脱敏占位符：请在回复中原样保留这些记号，不要翻译、改写、展开或解释它们，也不要猜测它们代表的内容。';
 

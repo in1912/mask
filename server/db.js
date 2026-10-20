@@ -165,6 +165,36 @@ CREATE TABLE IF NOT EXISTS upgrade_logs (
   detail TEXT,
   ok INTEGER DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS batch_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'text',
+  status TEXT NOT NULL DEFAULT 'ready',
+  options_json TEXT DEFAULT '{}',
+  total INTEGER DEFAULT 0,
+  ok_count INTEGER DEFAULT 0,
+  fail_count INTEGER DEFAULT 0,
+  error TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_batch_jobs_user ON batch_jobs(user_id, id DESC);
+CREATE TABLE IF NOT EXISTS batch_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  ext TEXT,
+  size INTEGER DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  error TEXT DEFAULT '',
+  chars INTEGER DEFAULT 0,
+  match_count INTEGER DEFAULT 0,
+  preview_raw TEXT DEFAULT '',
+  preview_masked TEXT DEFAULT '',
+  out_name TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_batch_files_batch ON batch_files(batch_id, id);
 `);
 
 // settings 读写（值 JSON 序列化，承工作台语义）
@@ -189,4 +219,22 @@ function seedAdmin() {
 }
 seedAdmin();
 
-module.exports = { db, DATA_DIR, getSetting, setSetting };
+// 文件名乱码修复：早期上传时 busboy 按 latin1 解码 multipart 文件名，中文名被存成「æµ‹è¯•.docx」。
+// 只在「按 UTF-8 无损还原且含中文」时改，避免误伤本来就是 latin1 的文件名。幂等：修好后不再匹配。
+function repairUploadNames() {
+  const fix = (s) => {
+    if (!s || !/[\u0080-ÿ]/.test(s)) return s;
+    const utf8 = Buffer.from(s, 'latin1').toString('utf8');
+    if (utf8.includes('�')) return s;          // 不是合法 UTF-8，保持原样
+    return /[㐀-鿿]/.test(utf8) ? utf8 : s; // 还原出中文才采用
+  };
+  try {
+    for (const row of db.prepare('SELECT id, filename FROM documents').all()) {
+      const fixed = fix(row.filename);
+      if (fixed !== row.filename) db.prepare('UPDATE documents SET filename = ? WHERE id = ?').run(fixed, row.id);
+    }
+  } catch { /* 老库结构不全时忽略，不影响启动 */ }
+}
+repairUploadNames();
+
+module.exports = { db, DATA_DIR, getSetting, setSetting, repairUploadNames };

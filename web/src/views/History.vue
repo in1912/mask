@@ -11,7 +11,7 @@ const detail = ref(null);
 const reviewOut = ref(null);
 const err = ref('');
 
-const SCOPE_ZH = { chat: '对话', preview: '试运行', file: '文件' };
+const SCOPE_ZH = { chat: '对话', preview: '试运行', file: '文件', batch: '批量' };
 
 async function load() {
   err.value = '';
@@ -53,6 +53,7 @@ onMounted(load);
           <option value="chat">对话</option>
           <option value="preview">试运行</option>
           <option value="file">文件</option>
+          <option value="batch">批量</option>
         </select>
         <span class="mut" style="font-size:12px">来源列「对话」可回查该会话；删除为硬删除</span>
         <span style="flex:1"></span>

@@ -63,6 +63,7 @@ const mask = require('./routes/maskRoutes')();
 app.use('/api', mask.router);
 app.use('/api', require('./routes/chatRoutes')(ctx));
 app.use('/api', require('./routes/fileRoutes')(ctx).router);
+app.use('/api/batch', require('./routes/batchRoutes')());
 app.use('/api', require('./routes/agentRoutes')().router);
 const pub = require('./routes/pubRoutes');
 app.use('/api', pub.router); // /pub 前缀在 EXEMPT 免登录名单里
