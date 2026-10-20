@@ -62,7 +62,14 @@ function findExecutable(exe) {
 }
 
 function missingCommandError(exe) {
-  const hint = MISSING_HINTS[exe.toLowerCase()] || '';
+  let hint = MISSING_HINTS[exe.toLowerCase()] || '';
+  // 项目自带 vendor/ 路径缺失 ≠ 用户没装 Java：说清楚是「这份安装没装配这个引擎」
+  const VENDOR = path.resolve(__dirname, '..', '..', 'vendor') + path.sep;
+  if (/[\\/]/.test(exe) && path.resolve(exe).startsWith(VENDOR)) {
+    hint = process.platform === 'win32'
+      ? '这是项目自带的引擎路径，但本安装里还没装配它（Windows 首次启动会自动编译；也可删掉 vendor/.engines-ready.json 后重启重装）。'
+      : '这是项目自带的引擎路径，但当前安装里没有它：Docker 请用 v0.4.1 及以上的镜像（镜像内已构建 godlp 与 sensitive-word）；macOS 目前只自动装配 Python 引擎。内置规则引擎与 Python 引擎不受影响。';
+  }
   return new Error(
     `找不到可执行程序「${exe}」——这台机器的 PATH 里没有它。${hint ? hint + ' ' : ''}` +
     '装好后重试，或把命令改成可执行文件的完整路径（如 "C:\\Program Files\\Java\\bin\\java.exe" -jar x.jar）。'

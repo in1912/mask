@@ -26,10 +26,7 @@ vendor/go
 vendor/maven
 vendor/maven-repo
 vendor/sensitive-word
-vendor/sensitive-word-workspace
 vendor/godlp
-vendor/godlp-cli
-vendor/engines-src/godlp
 vendor/.engines-ready.json
 scripts/check-*.mjs
 scripts/verify-upgrade-restart.mjs

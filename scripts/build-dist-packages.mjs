@@ -121,10 +121,13 @@ function deployNote(variant) {
       '· 本包不含 node_modules，依赖在 docker build 时安装（要联网）。',
       '· MASK_DATA_DIR=/app/data，数据落在宿主机 ./data 目录（compose 已挂载）。',
       '· .dockerignore 已排除 data/，数据库与密钥不会进镜像。',
-      '· 外部引擎默认不装配（MASK_NO_SETUP=1）：内置规则引擎开箱即用。',
-      '  需要时执行：docker compose exec mask node scripts/engines-setup.mjs，',
+      '· v0.4.1 起镜像内已构建 godlp 与 sensitive-word，开箱即用，无需改设置。',
+      '· Python 引擎（Presidio/GLiNER/OPF/argus/scrubadub）默认不装配（MASK_NO_SETUP=1），',
+      '  内置规则引擎 + 两个命令行引擎已够用。需要时执行：',
+      '      docker compose exec mask node scripts/engines-setup.mjs',
       '  并把 compose 里 python/vendor、python/models 两行挂载放开，否则容器重建会丢（数 GB）。',
-      '· 构建镜像未在本仓库的开发机上实测（开发机没有 Docker）；Dockerfile 只做最小运行集。',
+      '· 构建镜像未在本仓库的开发机上实测（开发机没有 Docker）；构建阶段的 godlp Linux 二进制',
+      '  已交叉编译验证，sensitive-word jar 已在本机构建。首次 build 需要联网拉 Go/Maven 依赖。',
     ],
   };
   return [...common, ...byVariant[variant], '', '完整功能说明见 README.md。', '开发自检脚本（scripts/check-*.mjs）不随包分发。'].join('\n');
@@ -150,7 +153,8 @@ const VARIANTS = [
   },
   {
     key: 'docker', label: 'Docker', launcher: null,
-    dirs: [['server'], [A('web', 'dist', latestDist)], ['vendor', 'engines-src', 'privacy-filter']],
+    dirs: [['server'], [A('web', 'dist', latestDist)], ['vendor', 'engines-src', 'privacy-filter'],
+      ['vendor', 'engines-src', 'godlp'], ['vendor', 'godlp-cli'], ['vendor', 'sensitive-word-workspace']],
     files: ['package.json', 'package-lock.json', 'README.md', 'Dockerfile', 'docker-compose.yml', '.dockerignore', '.gitignore',
       A('python', 'sidecar.py'), A('python', 'fetch_models.py'),
       A('scripts', 'start.mjs'), A('scripts', 'engines-setup.mjs')],

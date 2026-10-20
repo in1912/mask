@@ -46,11 +46,13 @@ npm run pack:dist      # 产物在仓库根目录（*.zip 已在 .gitignore，�
 
 三个包都**不含任何个人数据**：`data/` 是空目录，首次启动自动建库（默认管理员 `aiadmin / admin123`，登录后请立刻改）。`Logs/`、`web/src/`、旧的前端构建、`python/vendor`、`python/models`、JDK/Go/Maven 运行时都不进包。
 
-**外部引擎**：内置规则引擎开箱即用。Windows 包首次启动会装配 Python 引擎并自动下载 JDK/Go/Maven 构建 godlp、sensitive-word；macOS 包只装配 Python 引擎（godlp/sensitive-word 的自动构建目前只按 Windows 编写）；Docker 默认 `MASK_NO_SETUP=1` 不装配，需要时执行 `docker compose exec mask node scripts/engines-setup.mjs` 并持久化 `python/vendor`、`python/models`。装配需要联网、体积数 GB，失败不拦主服务，设置 → 引擎里如实报哪个不可用。
+**外部引擎**：内置规则引擎开箱即用。Windows 包首次启动会装配 Python 引擎并自动下载 JDK/Go/Maven 构建 godlp、sensitive-word；macOS 包只装配 Python 引擎（godlp/sensitive-word 的自动构建目前只按 Windows 编写）；Docker 镜像（v0.4.1+）已内置 godlp 与 sensitive-word，Python 引擎默认不装配，需要时执行 `docker compose exec mask node scripts/engines-setup.mjs` 并持久化 `python/vendor`、`python/models`。装配需要联网、体积数 GB，失败不拦主服务，设置 → 引擎里如实报哪个不可用。
 
-**验证边界**：Windows 包已解压实测（health / 版本 0.4.0 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通；开发机没有 Docker，**镜像本身未实际构建**。
+**Docker 镜像里内置了什么**：v0.4.1 起 Dockerfile 用多阶段构建，镜像内直接带好 **godlp**（Go 静态二进制）与 **sensitive-word**（Maven 打出的 jar + JRE 17 软链），两个命令行引擎开箱即用，默认命令本来就指向 `vendor/` 下这两个路径，无需改设置。Python 引擎仍按需装配（数 GB）。
 
-## 功能（v0.4.0）
+**验证边界**：Windows 包已解压实测（health / 版本 / 入口 chunk / 匿名 `/api/batch` 401）；Docker 包按 Dockerfile 的文件集合 `npm ci --omit=dev` 后同样跑通，构建阶段的 godlp Linux 二进制已交叉编译验证、sensitive-word jar 已在本机构建；开发机没有 Docker，**镜像本身未实际构建**。
+
+## 功能（v0.4.1）
 
 | 菜单 | 说明 |
 |---|---|
