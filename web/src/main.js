@@ -8,6 +8,7 @@ import Files from './views/Files.vue';
 import Batch from './views/Batch.vue';
 import Agent from './views/Agent.vue';
 import Rules from './views/Rules.vue';
+import Engines from './views/Engines.vue';
 import History from './views/History.vue';
 import About from './views/About.vue';
 import Users from './views/Users.vue';
@@ -23,6 +24,7 @@ const router = createRouter({
     { path: '/batch', component: Batch },
     { path: '/agents', component: Agent },
     { path: '/rules', component: Rules },
+    { path: '/engines', component: Engines },
     { path: '/history', component: History },
     { path: '/about', component: About },
     { path: '/users', component: Users },

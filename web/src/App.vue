@@ -9,11 +9,12 @@ const user = ref(null);
 const theme = ref('dark');
 
 const NAV = [
-  { path: '/', icon: 'forum', label: '数据脱敏' },
+  { path: '/', icon: 'forum', label: '脱敏对话' },
   { path: '/files', icon: 'description', label: '文件脱敏' },
   { path: '/batch', icon: 'inventory_2', label: '批量脱敏' },
   { path: '/agents', icon: 'smart_toy', label: 'Agent协同' },
   { path: '/rules', icon: 'tune', label: '规则配置' },
+  { path: '/engines', icon: 'memory', label: '脱敏引擎', admin: true },
   { path: '/history', icon: 'history', label: '脱敏历史' },
   { path: '/about', icon: 'science', label: '脱敏原理' },
   { path: '/users', icon: 'manage_accounts', label: '用户管理', admin: true },
@@ -79,7 +80,7 @@ watch(user, (u) => { if (u && route.path === '/login') router.push('/'); });
     <div class="nav-backdrop" @click="closeDrawer"></div>
     <div class="main-col">
       <header class="topbar">
-        <button class="theme-dot hamburger" @click="toggleNav"><span class="material-icons">menu</span></button>
+        <button class="theme-dot hamburger" :title="collapsed ? '展开目录' : '收起目录（只显示图标）'" @click="toggleNav"><span class="material-icons">menu</span></button>
         <b>{{ (NAV.find(x => x.path === route.path) || {}).label || '面具' }}</b>
         <span class="grow"></span>
         <button v-for="t in THEMES" :key="t.id" class="theme-dot" :class="{ on: theme === t.id }" :title="t.label"

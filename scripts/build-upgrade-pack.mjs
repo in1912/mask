@@ -36,7 +36,8 @@ const die = (m) => { console.error('\n❌ ' + m + '\n'); process.exit(1); };
 const pkgPath = path.join(ROOT, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
 const version = String(pkg.version || '').trim();
-if (!/^\d+\.\d+\.\d+/.test(version)) die(`package.json 里的 version 不像版本号（${JSON.stringify(pkg.version)}）`);
+// v1.00 起版本号只保留两段：1.00 → 1.01 … 1.99 → 2.00（不再写 1.00.1）
+if (!/^\d+\.\d+$/.test(version)) die(`package.json 里的 version 必须是两段版本号，如 1.00、1.01、2.00（当前 ${JSON.stringify(pkg.version)}）`);
 
 // ---------- 2) 选 dist（口径与 latestDist() 完全一致） ----------
 const distRoot = path.join(ROOT, 'web', 'dist');

@@ -120,6 +120,7 @@ try {
   ok('A10 回复已复原手机号', done1?.content.includes('13812345678'));
   ok('A11 回复已复原公司名', done1?.content.includes('杭州云梯智造有限公司'));
   ok('A12 复核结论完整', done1?.review?.verdict === 'complete');
+  ok('A13 start 带本轮识别引擎', start1?.engine === '内置规则引擎', String(start1?.engine));
   const convId = done1?.conv_id;
 
   console.log('B. 第二轮：同会话同码 + 持久化');
@@ -140,6 +141,12 @@ try {
   const done2 = r2.events.find((e) => e.type === 'done');
   const deltas2 = r2.events.filter((e) => e.type === 'delta').map((e) => e.text).join('');
   ok('B4 第二轮增量拼接仍一致', deltas2 === done2?.content);
+  // 界面「本轮对照关系」只能看到本轮消息里的实体，历史轮次不重复列出（v1.00）
+  ok('B5 start 对照表只含本轮实体', start2?.mapping?.some((m) => m.term === '13812345678')
+    && !start2.mapping.some((m) => m.term === '杭州云梯智造有限公司' || m.term === '45万元'),
+    JSON.stringify((start2?.mapping || []).map((m) => m.term)));
+  ok('B6 复核「未出现」不含历史实体', !(done2?.review?.unused || []).includes('杭州云梯智造有限公司'),
+    JSON.stringify(done2?.review?.unused || []));
 
   console.log('C. 持久化与历史');
   const convs = await req('GET', '/api/conversations', { token: tk });

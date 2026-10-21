@@ -129,7 +129,26 @@ module.exports = function (ctx) {
     const last = msgs[msgs.length - 1];
     const lastMasked = outMsgs[outMsgs.length - 1].content;
 
-    send({ type: 'start', conv_id: conv.id, masked: !skipped, mapping: skipped ? [] : [...map.values()], count: skipped ? 0 : map.size, skipped, reason: skipReason });
+    // 本轮对照：只取本轮最后一条用户消息里真正出现的实体。
+    // map 是整段会话的持久对照表（同实体全程同码），历史轮次的条目不再重复推给界面。
+    const fullEntries = [...map.values()];
+    let roundEntries = [];
+    if (!skipped) {
+      const used = new Set(engine.decode(lastMasked, fullEntries).usedCodes);
+      roundEntries = fullEntries.filter((e) => used.has(e.code));
+    }
+
+    // 本轮实际参与识别的引擎（界面要如实显示，不能只说「已脱敏」）
+    const engineUsed = skipped ? '' : (() => {
+      const all = engines.getCfg();
+      const ids = engines.activeExternalEngines();
+      const nm = (id) => (engines.ENGINES.find((e) => e.id === id) || {}).name || id;
+      if (!ids.length) return '内置规则引擎';
+      if (all.mode === 'primary') return `${nm(ids[0])}（外部主引擎）`;
+      return `内置规则 + ${ids.map(nm).join(' + ')}（并行）`;
+    })();
+
+    send({ type: 'start', conv_id: conv.id, masked: !skipped, mapping: skipped ? [] : roundEntries, count: skipped ? 0 : roundEntries.length, engine: engineUsed, skipped, reason: skipReason });
 
     // 流式复原：宁可扣住最后几个字符，也绝不把半个占位符泄进气泡
     let carry = '';
@@ -165,10 +184,18 @@ module.exports = function (ctx) {
       emitted += tail;
       send({ type: 'delta', text: tail });
 
-      const review = skipped ? null : engine.review(emitted, [...map.values()]);
+      // 回文复核按整张会话表复原（回复可能引用前几轮实体），但「未出现」只统计本轮条目，
+      // 否则前几轮的历史对照会被一直列出来，让人以为是本轮的问题。
+      let review = null;
+      if (!skipped) {
+        const full = engine.review(emitted, fullEntries);
+        const usedCodes = new Set(engine.decode(emitted, fullEntries).usedCodes);
+        const unused = roundEntries.filter((e) => !usedCodes.has(e.code)).map((e) => e.term);
+        review = { ...full, unused, restoredCount: roundEntries.length - unused.length };
+      }
 
       db.prepare('INSERT INTO messages (conv_id, role, content, masked_content, mask_count) VALUES (?, ?, ?, ?, ?)')
-        .run(conv.id, 'user', last.content, skipped ? null : lastMasked, skipped ? 0 : map.size);
+        .run(conv.id, 'user', last.content, skipped ? null : lastMasked, skipped ? 0 : roundEntries.length);
       db.prepare('INSERT INTO messages (conv_id, role, content) VALUES (?, ?, ?)').run(conv.id, 'assistant', emitted);
       db.prepare('INSERT INTO ai_replies (conv_id, source, raw_return, restored_text, review_json) VALUES (?, ?, ?, ?, ?)')
         .run(conv.id, 'internal', raw, emitted, review ? JSON.stringify(review) : null);
@@ -176,7 +203,7 @@ module.exports = function (ctx) {
         .run(uid, 'chat', conv.id, skipped ? 0 : map.size, JSON.stringify(skipped ? [] : [...map.values()]), (skipped ? '' : lastMasked).slice(0, 2000));
       db.prepare("UPDATE conversations SET updated_at = datetime('now','localtime') WHERE id = ?").run(conv.id);
 
-      send({ type: 'done', conv_id: conv.id, content: emitted, review });
+      send({ type: 'done', conv_id: conv.id, content: emitted, review, engine: engineUsed });
     } catch (e) {
       send({ type: 'error', error: String(e.message || e).slice(0, 300) });
     }

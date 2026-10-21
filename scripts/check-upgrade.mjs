@@ -16,7 +16,7 @@ const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
 
 const PORT = 9924;
 const BASE = `http://127.0.0.1:${PORT}`;
-const REPO_VER = require(path.join(ROOT, 'package.json')).version; // 0.3.0
+const REPO_VER = require(path.join(ROOT, 'package.json')).version; // 1.00 起只用两段版本号
 const DIST0 = '20260101000000'; // 临时仓库的初始前端目录（后续包用 +1/+2/…，保证比现役新）
 
 let pass = 0, fail = 0;
@@ -335,13 +335,16 @@ console.log('\n== H. 备份下载 + 升级日志 ==');
   ok('日志解析出 actor/ok/restart_suppressed', last.actor === 'aiadmin' && last.ok === true && last.restart_suppressed === true);
 }
 
-console.log('\n== J. 版本比较按数字段（0.4.10 不是 0.4.9 的降级） ==');
+console.log('\n== J. 版本比较按数字段（0.4.10 不是 0.4.9 的降级；1.00 起两段） ==');
 {
   const { cmpVersion } = require(path.join(ROOT, 'server', 'services', 'upgradeService.js'));
   ok('J1 0.4.10 > 0.4.9', cmpVersion('0.4.10', '0.4.9') === 1);
   ok('J2 0.4.2 < 0.4.10', cmpVersion('0.4.2', '0.4.10') === -1);
   ok('J3 同版本相等', cmpVersion('1.2.3', 'v1.2.3') === 0);
   ok('J4 正式版高于预发布', cmpVersion('1.0.0', '1.0.0-beta.1') === 1);
+  ok('J5 两段版本号可比较 1.01 > 1.00', cmpVersion('1.01', '1.00') === 1);
+  ok('J6 两段版本进位 1.99 < 2.00', cmpVersion('1.99', '2.00') === -1);
+  ok('J7 仓库版本号是两段格式（1.00 起，不写 1.00.1）', /^\d+\.\d+$/.test(REPO_VER));
 }
 
 console.log('\n== I. 开发机真实仓库未被动过 ==');

@@ -198,6 +198,9 @@ onMounted(loadConvs);
       </div>
       <div class="card">
         <h4>本轮对照关系（{{ curMask && !curMask.skipped ? curMask.count : 0 }} 项）</h4>
+        <p v-if="curMask && !curMask.skipped" class="mut" style="font-size:12px;margin-bottom:6px">
+          识别引擎：<b>{{ curMask.engine || '内置规则引擎' }}</b>
+        </p>
         <div v-if="!curMask || curMask.skipped" class="mut" style="font-size:12px">{{ curMask ? curMask.reason : '尚未发送' }}</div>
         <div v-else class="tbl-scroll">
           <table class="tbl map-tbl">
@@ -213,11 +216,11 @@ onMounted(loadConvs);
         </div>
       </div>
       <div class="card" v-if="curReview">
-        <h4>回文复核</h4>
+        <h4>本轮回文复核</h4>
         <p style="font-size:12.5px">
           <span class="tag" :class="curReview.verdict === 'complete' ? 'ok' : 'warn'">{{ curReview.verdict === 'complete' ? '完整复原' : '存在残留' }}</span>
-          <span v-if="curReview.residual.length" class="err"> 残留代码：{{ curReview.residual.join('、') }}</span>
-          <span v-if="curReview.unused.length" class="mut">（未在回复中出现的原文：{{ curReview.unused.join('、') }}）</span>
+          <span v-if="curReview.residual && curReview.residual.length" class="err"> 残留代码：{{ curReview.residual.join('、') }}</span>
+          <span v-if="curReview.unused && curReview.unused.length" class="mut">（本轮对照中未在回复里出现的：{{ curReview.unused.join('、') }}）</span>
         </p>
       </div>
     </aside>
