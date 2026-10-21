@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { api } from '../api.js';
+import { api, token } from '../api.js';
 import { mdToHtml, copyText } from '../md.js';
 
 const links = ref([]);
@@ -9,6 +9,8 @@ const page = ref(1);
 const size = ref(5);
 const days = ref(0);
 const flash = ref('');
+const selected = ref([]);   // 勾选的链接 id（批量导出回文）
+const savingRemark = ref(0);
 
 // 选中的链接 → 回文列表
 const curLink = ref(null);
@@ -27,6 +29,31 @@ async function load() {
   const out = await api(`/agents?size=${size.value}&page=${page.value}`);
   links.value = out.rows;
   total.value = out.total;
+  selected.value = selected.value.filter((id) => out.rows.some((l) => l.id === id));
+}
+const allOn = computed(() => links.value.length > 0 && links.value.every((l) => selected.value.includes(l.id)));
+function toggleAll(e) {
+  selected.value = e.target.checked ? links.value.map((l) => l.id) : [];
+}
+function toggleOne(l) {
+  selected.value = selected.value.includes(l.id)
+    ? selected.value.filter((id) => id !== l.id)
+    : [...selected.value, l.id];
+}
+function downloadSelected() {
+  if (!selected.value.length) return;
+  window.open('/api/agents/export?ids=' + selected.value.join(',') + '&token=' + encodeURIComponent(token()), '_blank');
+}
+async function saveRemark(l, value) {
+  const remark = String(value || '').trim();
+  if (remark === (l.remark || '')) return;
+  savingRemark.value = l.id;
+  try {
+    await api('/agents/' + l.id, { method: 'PUT', body: { remark } });
+    l.remark = remark;
+    say(remark ? '备注已保存' : '备注已清空');
+  } catch (e) { alert('备注保存失败：' + e.message); }
+  savingRemark.value = 0;
 }
 async function create() {
   const out = await api('/agents', { method: 'POST', body: { days: days.value } });
@@ -79,17 +106,26 @@ onMounted(load);
         <option :value="30">30 天</option>
       </select>
       <button class="btn primary" @click="create"><span class="material-icons">add_link</span>创建链接</button>
+      <button class="btn" :disabled="!selected.length" title="把勾选链接的回文导出为 txt（多个打包成 zip，文件名用备注）" @click="downloadSelected">
+        <span class="material-icons">download</span>下载所选（{{ selected.length }}）
+      </button>
     </div>
     <p v-if="flash" class="mut" style="margin:2px 0 8px">{{ flash }}</p>
 
     <table class="tbl">
       <thead><tr>
-        <th>创建时间</th><th>创建人</th><th>有效期</th><th>回文数</th><th>最近回文</th><th style="width:250px">操作</th>
+        <th style="width:34px"><input type="checkbox" :checked="allOn" title="全选本页" @change="toggleAll" /></th>
+        <th>创建时间</th><th style="width:170px">备注</th><th>创建人</th><th>有效期</th><th>回文数</th><th>最近回文</th><th style="width:250px">操作</th>
       </tr></thead>
       <tbody>
-        <tr v-if="!links.length"><td colspan="6" class="mut" style="text-align:center;padding:26px">还没有链接，点右上「创建链接」生成一个给外部 AI 用</td></tr>
+        <tr v-if="!links.length"><td colspan="8" class="mut" style="text-align:center;padding:26px">还没有链接，点右上「创建链接」生成一个给外部 AI 用</td></tr>
         <tr v-for="l in links" :key="l.id" :class="{ selrow: curLink && curLink.id === l.id }" @click="openLink(l)">
+          <td @click.stop><input type="checkbox" :checked="selected.includes(l.id)" @change="toggleOne(l)" /></td>
           <td class="mut">{{ l.at }}</td>
+          <td @click.stop>
+            <input class="remark-input" :value="l.remark || ''" placeholder="点此添加备注"
+              :disabled="savingRemark === l.id" maxlength="60" @change="saveRemark(l, $event.target.value)" />
+          </td>
           <td>{{ l.created_by }}</td>
           <td><span class="tag" :class="l.revoked ? 'warn' : 'ok'">{{ validity(l) }}</span></td>
           <td>{{ l.writes }}</td>
@@ -152,6 +188,9 @@ onMounted(load);
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .selrow { background: var(--hover); }
 .ellip { max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remark-input { width: 100%; padding: 3px 6px; font-size: 13px; background: transparent; border-color: transparent; }
+.remark-input:hover { border-color: var(--line); }
+.remark-input:focus { background: var(--bg); border-color: var(--accent); }
 .pager { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
 .writes { border-top: 1px dashed var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .writes-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

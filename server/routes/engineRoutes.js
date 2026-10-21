@@ -44,6 +44,11 @@ router.get('/', (req, res) => {
   res.json({ config: engines.getCfg(), engines: engines.engineList() });
 });
 
+// 文件脱敏 / 脱敏对话的「本页选引擎」下拉：内置规则 + 各外部文本引擎，附带全局配置供界面标注
+router.get('/options', (req, res) => {
+  res.json({ options: engines.textEngineOptions(), globals: engines.activeExternalEngines(), mode: engines.getCfg().mode });
+});
+
 // 致谢：最近一次探测成功的引擎（名称/厂商/仓库/许可证/探测时间）
 router.get('/ack', (req, res) => {
   res.json({ items: engines.acknowledgements() });

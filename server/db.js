@@ -197,6 +197,15 @@ CREATE TABLE IF NOT EXISTS batch_files (
 CREATE INDEX IF NOT EXISTS idx_batch_files_batch ON batch_files(batch_id, id);
 `);
 
+// ---- 轻量迁移：老库补列（幂等；表名与列名都是常量，不拼用户输入）----
+function ensureColumn(table, col, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+}
+ensureColumn('users', 'locked_until', 'TEXT');      // v1.01：连续输错 3 次锁 30 分钟
+ensureColumn('links', 'remark', 'TEXT');            // v1.01：Agent 链接备注名
+ensureColumn('documents', 'mask_engine', 'TEXT');   // v1.01：文件脱敏可单独选引擎（NULL=跟随全局）
+
 // settings 读写（值 JSON 序列化，承工作台语义）
 function getSetting(key, def = null) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);

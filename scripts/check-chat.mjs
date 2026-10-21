@@ -121,6 +121,11 @@ try {
   ok('A11 回复已复原公司名', done1?.content.includes('杭州云梯智造有限公司'));
   ok('A12 复核结论完整', done1?.review?.verdict === 'complete');
   ok('A13 start 带本轮识别引擎', start1?.engine === '内置规则引擎', String(start1?.engine));
+  const opts = await req('GET', '/api/engines/options', { token: tk });
+  const optIds = (opts.json.options || []).map((o) => o.id);
+  ok('A14 对话页引擎下拉含内置与外部文本引擎、不含工具类',
+    opts.status === 200 && optIds[0] === 'builtin' && optIds.includes('presidio') && !optIds.includes('cloakdb'),
+    `${opts.status} ${optIds.join(',')}`);
   const convId = done1?.conv_id;
 
   console.log('B. 第二轮：同会话同码 + 持久化');
@@ -170,6 +175,16 @@ try {
   ok('D2 不注入占位码指令', !(stub4?.messages?.[0]?.role === 'system'));
   ok('D3 start 如实标记未脱敏', start4?.skipped === true && start4.mapping.length === 0);
   ok('D4 无增量解码变形', r4.events.filter((e) => e.type === 'delta').map((e) => e.text).join('') === r4.events.find((e) => e.type === 'done')?.content);
+
+  console.log('E. 对话页自选引擎（本轮覆盖全局）');
+  const r5 = await chat(tk, { conv_id: convId, messages: [{ role: 'user', content: '再核对一下手机 13812345678。' }], desensitize: true, engine: 'builtin' });
+  const start5 = r5.events.find((e) => e.type === 'start');
+  const done5 = r5.events.find((e) => e.type === 'done');
+  ok('E1 选内置引擎时如实标注「本页所选」', start5?.masked === true && start5?.engine === '内置规则引擎（本页所选）', String(start5?.engine));
+  ok('E2 自选引擎仍然脱敏并复原', !!start5?.mapping?.length && (done5?.content || '').includes('13812345678'));
+  const r6 = await chat(tk, { conv_id: convId, messages: [{ role: 'user', content: '这条用默认配置。' }], desensitize: true, engine: 'no-such-engine' });
+  const start6 = r6.events.find((e) => e.type === 'start');
+  ok('E3 未知引擎 id 回落到全局配置', start6?.engine === '内置规则引擎', String(start6?.engine));
 } finally {
   child.kill();
   stub.close();

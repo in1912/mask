@@ -7,6 +7,8 @@ const convId = ref(null);
 const messages = ref([]);
 const input = ref('');
 const useMask = ref(localStorage.getItem('mask_use') !== '0');
+const engineOpts = ref([]);   // 本页可选脱敏引擎
+const engSel = ref(localStorage.getItem('mask_chat_engine') || ''); // '' = 跟随全局
 const streaming = ref(false);
 const curMask = ref(null);   // 本轮 start 事件：mapping/count/skipped
 const curReview = ref(null); // done 事件里的复核
@@ -28,6 +30,8 @@ async function openConv(id) {
   curReview.value = null;
   const out = await api('/conversations/' + id + '/messages');
   messages.value = out.messages.map((m) => ({ role: m.role, content: m.content, mask_count: m.mask_count }));
+  // 打开会话默认落在最后一条：显示最新对话的完整内容，而不是从头（最早）开始
+  scrollBottom();
 }
 function newConv() {
   convId.value = null;
@@ -45,6 +49,15 @@ async function delConv(id) {
 function toggleMask() {
   useMask.value = !useMask.value;
   localStorage.setItem('mask_use', useMask.value ? '1' : '0');
+}
+function saveEngine() {
+  localStorage.setItem('mask_chat_engine', engSel.value);
+}
+async function loadEngines() {
+  try {
+    const out = await api('/engines/options');
+    engineOpts.value = out.options || [];
+  } catch { engineOpts.value = []; } // 拉不到就让选择留在「跟随全局」，发送仍走全局配置
 }
 
 async function attach() {
@@ -85,6 +98,7 @@ async function send(forceMask) {
         conv_id: convId.value,
         messages: messages.value.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
         desensitize: masked,
+        engine: engSel.value,
         with_rules: true
       })
     });
@@ -136,7 +150,7 @@ function onKey(e) {
   else if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); send(true); }
 }
 
-onMounted(loadConvs);
+onMounted(() => { loadConvs(); loadEngines(); });
 </script>
 
 <template>
@@ -157,6 +171,12 @@ onMounted(loadConvs);
           <input type="checkbox" :checked="useMask" @change="toggleMask"><i></i>
         </label>
         <span class="mut" style="font-size:13px">发送前脱敏</span>
+        <label class="eng-pick" title="本页选用的脱敏引擎；「跟随全局」= 用「脱敏引擎」页设置的主引擎/并行配置">
+          <select v-model="engSel" @change="saveEngine">
+            <option value="">跟随全局</option>
+            <option v-for="o in engineOpts" :key="o.id" :value="o.id">{{ o.name }}</option>
+          </select>
+        </label>
         <span v-if="curMask && !curMask.skipped" class="tag ok">本轮替换 {{ curMask.count }} 项</span>
         <span v-else-if="curMask && curMask.skipped" class="tag warn">未脱敏：{{ curMask.reason || '开关关闭' }}</span>
       </div>
@@ -230,4 +250,5 @@ onMounted(loadConvs);
 <style scoped>
 .cursor { animation: blink 1s step-start infinite; }
 @keyframes blink { 50% { opacity: 0; } }
+.eng-pick select { background: var(--panel2, var(--panel)); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; font-size: 12.5px; max-width: 170px; }
 </style>

@@ -31,6 +31,12 @@ async function toggleStatus(u) {
   await api('/users/' + u.id, { method: 'PUT', body: { status: u.status === 'active' ? 'disabled' : 'active' } });
   load();
 }
+function nowLocalStr() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+const tempLocked = (u) => !!u.locked_until && u.locked_until > nowLocalStr();
 async function unlock(u) {
   await api('/users/' + u.id, { method: 'PUT', body: { unlock: true } });
   load();
@@ -72,13 +78,14 @@ onMounted(async () => {
             <td><span class="tag" :class="u.role === 'admin' ? '' : 'ok'">{{ u.role === 'admin' ? '管理员' : '用户' }}</span></td>
             <td>
               <span v-if="u.locked_permanent" class="tag danger">永久锁定</span>
+              <span v-else-if="tempLocked(u)" class="tag warn" :title="'输错密码锁定至 ' + u.locked_until">输错锁定</span>
               <span v-else class="tag" :class="u.status === 'active' ? 'ok' : 'warn'">{{ u.status === 'active' ? '正常' : '停用' }}</span>
             </td>
             <td class="mut">{{ u.last_login_at || '—' }}</td>
             <td>
               <button class="btn sm" @click="resetPw(u)">重置密码</button>
               <button class="btn sm" style="margin-left:4px" @click="toggleStatus(u)">{{ u.status === 'active' ? '停用' : '启用' }}</button>
-              <button v-if="u.locked_permanent" class="btn sm" style="margin-left:4px" @click="unlock(u)">解锁</button>
+              <button v-if="u.locked_permanent || tempLocked(u)" class="btn sm" style="margin-left:4px" @click="unlock(u)">解锁</button>
               <button v-if="u.id !== me?.id" class="btn sm danger" style="margin-left:4px" @click="del(u)">删除</button>
             </td>
           </tr>

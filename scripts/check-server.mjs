@@ -2,6 +2,7 @@
 // 面具 mask — 服务级自检：起真实服务（临时数据目录），测登录三态/限流/IP黑名单/用户/规则/历史/附件/聊天降级
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -170,6 +171,24 @@ try {
     const after = await fetch(BASE + '/api/health', { headers: { 'X-Forwarded-For': '1.2.3.4' } });
     ok('C6 解封后恢复 200', after.status === 200);
 
+    // v1.01：同一账号输错 3 次 → 锁 30 分钟；提示不透露剩余时间
+    console.log('C7. 账号输错 3 次锁定 30 分钟');
+    await req('POST', '/api/users', { token: tk, body: { username: 'locktest', password: '123456', role: 'user' } });
+    const LOCK_MSG = '密码输入错误上限已达，禁止登录系统';
+    const f1 = await req('POST', '/api/auth/login', { body: { username: 'locktest', password: 'bad' }, xff: '8.8.8.8' });
+    const f2 = await req('POST', '/api/auth/login', { body: { username: 'locktest', password: 'bad' }, xff: '8.8.8.8' });
+    const f3 = await req('POST', '/api/auth/login', { body: { username: 'locktest', password: 'bad' }, xff: '8.8.8.8' });
+    ok('C7 前两次错误仍是 401', f1.status === 401 && f2.status === 401);
+    ok('C8 第 3 次锁定且提示只有一句', f3.status === 403 && f3.json.error === LOCK_MSG, JSON.stringify(f3.json));
+    const f4 = await req('POST', '/api/auth/login', { body: { username: 'locktest', password: '123456' }, xff: '8.8.8.8' });
+    ok('C9 锁定期内密码正确也拒绝', f4.status === 403 && f4.json.error === LOCK_MSG);
+    const users = await req('GET', '/api/users', { token: tk });
+    const lockUser = users.json.users.find((x) => x.username === 'locktest');
+    ok('C10 用户表能看到限时锁定', !!lockUser?.locked_until);
+    await req('PUT', '/api/users/' + lockUser.id, { token: tk, body: { unlock: true } });
+    const f5 = await req('POST', '/api/auth/login', { body: { username: 'locktest', password: '123456' }, xff: '8.8.8.8' });
+    ok('C11 管理员解锁后可登录', f5.status === 200 && !!f5.json.token);
+
     console.log('D. 用户管理与权限');
     const nu = await req('POST', '/api/users', { token: tk, body: { username: 'u1', password: '123456', role: 'user', display_name: '测试员' } });
     ok('D1 创建普通用户', nu.status === 200);
@@ -181,6 +200,19 @@ try {
     const th2 = await req('POST', '/auth/theme'.replace('/auth', '/api/auth'), { token: tk2, body: { theme: 'green' } });
     const me3 = await req('GET', '/api/auth/me', { token: tk2 });
     ok('D4 普通用户可改自己的主题', th2.status === 200 && me3.json.theme === 'green');
+
+    console.log('D5. 站点默认风格（管理员统一，用户自选优先）');
+    const sys1 = await req('GET', '/api/settings/system', { token: tk });
+    ok('D5 系统设置返回站点默认风格', sys1.status === 200 && sys1.json.default_theme === 'dark', JSON.stringify(sys1.json));
+    const setDef = await req('POST', '/api/settings/system', { token: tk, body: { default_theme: 'light' } });
+    const meLock = await req('GET', '/api/auth/me', { token: f5.json.token });
+    ok('D6 没自选过的用户跟随站点默认 light', setDef.status === 200 && meLock.json.theme === 'light', String(meLock.json.theme));
+    const meOwn = await req('GET', '/api/auth/me', { token: tk2 });
+    ok('D7 自己选过风格的用户不被覆盖', meOwn.json.theme === 'green', String(meOwn.json.theme));
+    const badDef = await req('POST', '/api/settings/system', { token: tk, body: { default_theme: 'pink' } });
+    const sys2 = await req('GET', '/api/settings/system', { token: tk });
+    ok('D8 非法风格拒绝且不改动', badDef.status === 400 && sys2.json.default_theme === 'light', String(badDef.status));
+    await req('POST', '/api/settings/system', { token: tk, body: { default_theme: 'dark' } });
 
     console.log('E. 规则配置 / 试运行 / 历史');
     const save = await req('PUT', '/api/rules/config', {
@@ -239,6 +271,34 @@ try {
 
     const nokey = await req('POST', '/api/chat', { token: tk, body: { messages: [] } });
     ok('G3 空 messages 400', nokey.status === 400);
+
+    console.log('H. Agent 链接备注与批量导出');
+    const mk1 = await req('POST', '/api/agents', { token: tk, body: { days: 0 } });
+    await req('PUT', '/api/agents/' + mk1.json.id, { token: tk, body: { remark: '客户A回文' } });
+    const list = await req('GET', '/api/agents?size=5', { token: tk });
+    ok('H1 备注已保存并在列表回显', list.json.rows.find((x) => x.id === mk1.json.id)?.remark === '客户A回文');
+    const pub = await fetch(BASE + '/api/pub/write/' + mk1.json.token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '这是外部 agent 的回文 A' })
+    });
+    ok('H2 外部回文可写入', pub.status === 200);
+    const one = await fetch(BASE + '/api/agents/export?ids=' + mk1.json.id + '&token=' + tk);
+    const oneText = await one.text();
+    const cd = one.headers.get('content-disposition') || '';
+    ok('H3 单个导出为 txt，文件名取自备注', /text\/plain/.test(one.headers.get('content-type') || '')
+      && /filename\*=UTF-8''/.test(cd) && decodeURIComponent(cd).includes('客户A回文.txt'), cd);
+    ok('H4 导出内容含备注与回文正文', oneText.includes('备注：客户A回文') && oneText.includes('这是外部 agent 的回文 A'));
+
+    const mk2 = await req('POST', '/api/agents', { token: tk, body: { days: 7 } });
+    await req('PUT', '/api/agents/' + mk2.json.id, { token: tk, body: { remark: '客户B回文' } });
+    await fetch(BASE + '/api/pub/write/' + mk2.json.token, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '这是外部 agent 的回文 B' })
+    });
+    const multi = await fetch(BASE + '/api/agents/export?ids=' + mk1.json.id + ',' + mk2.json.id + '&token=' + tk);
+    const zipBuf = Buffer.from(await multi.arrayBuffer());
+    ok('H5 多选导出为 zip', /application\/zip/.test(multi.headers.get('content-type') || '') && zipBuf.subarray(0, 2).toString() === 'PK');
+    const { extractZip } = createRequire(import.meta.url)(path.join(ROOT, 'server', 'services', 'zipService.js'));
+    const entries = extractZip(zipBuf).map((e) => e.name);
+    ok('H6 zip 内每个链接一个 txt，文件名=备注', entries.includes('客户A回文.txt') && entries.includes('客户B回文.txt'), JSON.stringify(entries));
   }
 } finally {
   child.kill();

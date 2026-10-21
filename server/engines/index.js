@@ -320,6 +320,12 @@ async function detectExternal(text) {
 }
 
 // ---------- 对外汇总（设置页/致谢页） ----------
+// 文件脱敏、脱敏对话的「本页选引擎」下拉：内置规则 + 全部可用文本引擎
+function textEngineOptions() {
+  return ENGINES
+    .filter((e) => !e.hidden && e.applicable !== false && e.kind !== 'tool')
+    .map((e) => ({ id: e.id, name: e.name, kind: e.kind }));
+}
 function engineList() {
   const cfg = getCfg();
   return ENGINES.map((e) => ({
@@ -349,17 +355,23 @@ function acknowledgements() {
 // 三种形态：主引擎=builtin → 零开销直通；主引擎=外部 → _extOnly 完全让位；并行 → 并集合并。
 // 引擎失败如实上抛/带 stats，绝不静默当没配过。
 const builtin = require('../engine');
-async function runMask(text, cfg, persisted, seed) {
+// opts.engine：单次覆盖（文件脱敏页每份文档可自选引擎）。
+// 'builtin' = 只用内置规则（不受全局外部主引擎影响）；外部 id = 只用这一个外部引擎；
+// 不传 = 走全局配置（主引擎 / 并行）。
+async function runMask(text, cfg, persisted, seed, opts) {
   const cfgAll = getCfg();
-  const ids = activeExternalEngines();
+  const forced = opts && typeof opts.engine === 'string'
+    && BY_ID.has(opts.engine) && isApplicable(BY_ID.get(opts.engine)) ? opts.engine : '';
+  const ids = forced === 'builtin' ? [] : (forced ? [forced] : activeExternalEngines());
+  const single = forced ? forced !== 'builtin' : cfgAll.mode === 'primary';
   // seed：调用方已经确认过的实体（批量脱敏里「前几个文件学到的对照」），
   // 即使当前文件没有上下文也要按已知实体脱敏，否则跨文件同码只是口号。
   const seeds = Array.isArray(seed) ? seed : [];
   if (!ids.length) return builtin.encode(text, cfg, persisted, seeds);
   let extra = [];
   let stats = [];
-  if (cfgAll.mode === 'primary') {
-    // 单一外部主引擎：失败就如实抛错（没有兜底引擎在跑，不能假装脱敏成功）
+  if (single) {
+    // 单一外部引擎：失败就如实抛错（没有兜底引擎在跑，不能假装脱敏成功）
     const ents = await detectWithEngine(ids[0], text);
     extra = seeds.concat(toCandidates(text, ents, ids[0]));
   } else {
@@ -372,7 +384,7 @@ async function runMask(text, cfg, persisted, seed) {
     }
   }
   const conf = { ...(cfg || {}) };
-  if (cfgAll.mode === 'primary') conf._extOnly = true;
+  if (single) conf._extOnly = true;
   const out = builtin.encode(text, conf, persisted, extra);
   if (stats.length) out.engine_stats = stats;
   return out;
@@ -381,5 +393,5 @@ async function runMask(text, cfg, persisted, seed) {
 module.exports = {
   ENGINES, TYPE_MAP,
   getCfg, saveCfg, probeEngine, detectWithEngine, detectExternal, activeExternalEngines,
-  engineList, acknowledgements, locateEntities, toCandidates, runMask,
+  engineList, textEngineOptions, acknowledgements, locateEntities, toCandidates, runMask,
 };

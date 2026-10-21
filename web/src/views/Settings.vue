@@ -1,16 +1,16 @@
 <script setup>
 import { ref, onMounted } from 'vue';
-import { api, token } from '../api.js';
+import { api, token, THEMES } from '../api.js';
 
 const tab = ref('logs');
 const TABS = [
   { id: 'logs', label: '登录日志' },
   { id: 'blacklist', label: 'IP 黑名单' },
   { id: 'ai', label: 'AI 配置' },
-  { id: 'ack', label: '致谢' },
   { id: 'upgrade', label: '升级' },
   { id: 'ssl', label: 'HTTPS 证书' },
-  { id: 'system', label: '系统信息' }
+  { id: 'system', label: '系统信息' },
+  { id: 'ack', label: '致谢' }
 ];
 
 // 登录日志
@@ -70,7 +70,7 @@ async function testAi() {
 }
 
 // 系统信息
-const sys = ref({ beian: '', external_base_url: '', local_base_url: '' });
+const sys = ref({ beian: '', external_base_url: '', local_base_url: '', default_theme: 'dark' });
 const lanAddrs = ref([]);
 const sysMsg = ref('');
 async function loadSys() {
@@ -289,7 +289,7 @@ onMounted(async () => {
     </div>
 
     <div v-else-if="tab === 'ack'" class="card">
-      <p class="mut" style="margin:0 0 12px;font-size:13px">系统引用了的开源引擎在此致谢——谢谢它们让脱敏更准。状态一栏只是「这台机器上是否配置可用」，不影响致谢。</p>
+      <p class="mut" style="margin:0 0 12px;font-size:13px">系统引用了的开源引擎在此致谢——谢谢它们让脱敏更准。</p>
       <div v-if="!ackItems.length" class="empty">（无外部引擎引用）</div>
       <div v-for="(a, i) in ackItems" :key="i" style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -408,6 +408,12 @@ onMounted(async () => {
     </div>
 
     <div v-else class="card" style="max-width:640px">
+      <label class="mut">站点默认风格（没有自己切换过风格的用户，登录后统一用这一套）</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 6px">
+        <button v-for="t in THEMES" :key="t.id" class="btn sm" :class="{ primary: sys.default_theme === t.id }"
+          @click="sys.default_theme = t.id"><span class="material-icons">{{ t.icon }}</span>{{ t.label }}</button>
+      </div>
+      <p class="mut" style="font-size:12px;margin:0 0 14px">用户自己点过右上角风格按钮的，会保存自己的选择，不受这里影响。</p>
       <label class="mut">ICP 备案文案（登录页底部显示；留空则不显示）</label>
       <input v-model="sys.beian" style="width:100%;margin:4px 0 12px" placeholder="浙ICP备XXXXXXXXXX" />
       <label class="mut">外网访问域名（用于分享链接 / Agent 注入链接，P1 生效）</label>

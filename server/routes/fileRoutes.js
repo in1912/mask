@@ -19,6 +19,9 @@ const SIZES = [5, 15, 30, 50, 100];
 
 const SYS_BASE = '文中形如 [公司A7]、[手机K3] 或 ORG-7K2M9 的记号是脱敏占位符：请在回复中原样保留这些记号，不要翻译、改写、展开或解释它们，也不要猜测它们代表的内容。';
 
+// 文件脱敏页可选的引擎：内置规则 + 所有可用的文本引擎（数据库/统计类工具不参与文本识别）
+const ENGINE_IDS = new Set(engines.textEngineOptions().map((o) => o.id));
+
 // 文档级对照表 → Map
 function docMap(docId) {
   const map = new Map();
@@ -61,7 +64,8 @@ module.exports = function (ctx) {
     else if (req.query.uid && isAdmin) { where.push('d.user_id = ?'); args.push(Number(req.query.uid) || 0); }
     const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
     const total = db.prepare(`SELECT COUNT(*) AS c FROM documents d ${w}`).get(...args).c;
-    const rows = db.prepare(`SELECT d.id, d.filename, d.type, d.size, d.match_count, d.created_at AS at,
+    const rows = db.prepare(`SELECT d.id, d.filename, d.type, d.size, d.match_count, d.mask_engine, d.created_at AS at,
+      (d.masked_text IS NOT NULL AND d.masked_text <> '') AS masked,
       u.username, u.display_name,
       (SELECT COUNT(*) FROM ai_replies a WHERE a.doc_id = d.id) AS reply_count
       FROM documents d LEFT JOIN users u ON u.id = d.user_id ${w} ORDER BY d.id DESC LIMIT ? OFFSET ?`)
@@ -72,11 +76,12 @@ module.exports = function (ctx) {
   // ---- 详情：原文 / 脱敏 / AI 返回（三栏数据源）----
   r.get('/documents/:id', (req, res) => {
     const d = ownDoc(req, res); if (!d) return;
-    const replies = db.prepare('SELECT id, source, raw_return, restored_text, review_json, created_at AS at FROM ai_replies WHERE doc_id = ? ORDER BY id DESC LIMIT 5').all(d.id);
+    // 多取一些：外部 agent 通过分享链接写入的回文不能被内置 AI 的多次调用挤出视野
+    const replies = db.prepare('SELECT id, source, raw_return, restored_text, review_json, created_at AS at FROM ai_replies WHERE doc_id = ? ORDER BY id DESC LIMIT 20').all(d.id);
     const mapping = db.prepare("SELECT term, code, rule_key, category, style FROM mappings WHERE scope_type = 'doc' AND scope_id = ? ORDER BY id").all(d.id);
     const shares = db.prepare("SELECT id, token, pair_token, expires_at, revoked, created_at AS at FROM links WHERE kind = 'doc' AND doc_id = ? ORDER BY id DESC").all(d.id);
     res.json({
-      doc: { id: d.id, filename: d.filename, type: d.type, size: d.size, created_at: d.created_at, match_count: d.match_count, meta_report: JSON.parse(d.meta_report_json || '[]') },
+      doc: { id: d.id, filename: d.filename, type: d.type, size: d.size, created_at: d.created_at, match_count: d.match_count, mask_engine: d.mask_engine || '', meta_report: JSON.parse(d.meta_report_json || '[]') },
       raw_text: d.raw_text, masked_text: d.masked_text || '',
       mapping, replies: replies.map((x) => ({ ...x, review: x.review_json ? JSON.parse(x.review_json) : null, review_json: undefined })),
       shares,
@@ -88,9 +93,12 @@ module.exports = function (ctx) {
     const d = ownDoc(req, res); if (!d) return;
     const cfg = loadCfg(d.user_id);
     const map = docMap(d.id);
+    // engine：'builtin' | 外部引擎 id；不传或空 = 跟随全局配置
+    const asked = String((req.body || {}).engine || '').trim();
+    const chosen = ENGINE_IDS.has(asked) ? asked : '';
     let out;
     try {
-      out = await engines.runMask(d.raw_text || '', cfg, map);
+      out = await engines.runMask(d.raw_text || '', cfg, map, undefined, { engine: chosen });
     } catch (e) {
       return res.status(502).json({ error: `脱敏引擎失败：${e.message}` });
     }
@@ -105,8 +113,8 @@ module.exports = function (ctx) {
       byRule[label] = (byRule[label] || 0) + 1;
     }
     const report = Object.entries(byRule).map(([rule, count]) => ({ rule, count }));
-    db.prepare('UPDATE documents SET masked_text = ?, match_count = ?, meta_report_json = ? WHERE id = ?')
-      .run(out.masked, out.count, JSON.stringify(report), d.id);
+    db.prepare('UPDATE documents SET masked_text = ?, match_count = ?, meta_report_json = ?, mask_engine = ? WHERE id = ?')
+      .run(out.masked, out.count, JSON.stringify(report), chosen || null, d.id);
     db.prepare('INSERT INTO desens_history (user_id, scope, ref_id, item_count, mapping_json, masked_preview) VALUES (?, ?, ?, ?, ?, ?)')
       .run(d.user_id, 'file', d.id, out.count, JSON.stringify(out.mapping), out.masked.slice(0, 2000));
     res.json({ masked: out.masked, mapping: out.mapping, count: out.count, report });

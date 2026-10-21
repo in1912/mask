@@ -14,7 +14,7 @@ module.exports = function (ctx) {
 
   // ---- 用户管理 ----
   r.get('/users', admin, (req, res) => {
-    res.json({ users: db.prepare('SELECT id, username, role, display_name, status, locked_permanent, created_at, last_login_at FROM users ORDER BY id').all() });
+    res.json({ users: db.prepare('SELECT id, username, role, display_name, status, locked_permanent, locked_until, created_at, last_login_at FROM users ORDER BY id').all() });
   });
   r.post('/users', admin, (req, res) => {
     const { username, password, role, display_name } = req.body || {};
@@ -45,7 +45,7 @@ module.exports = function (ctx) {
     if (b.status !== undefined && ['active', 'disabled'].includes(b.status)) db.prepare('UPDATE users SET status = ? WHERE id = ?').run(b.status, u.id);
     if (b.locked_permanent !== undefined) db.prepare('UPDATE users SET locked_permanent = ? WHERE id = ?').run(b.locked_permanent ? 1 : 0, u.id);
     if (b.unlock === true) {
-      db.prepare('UPDATE users SET locked_permanent = 0 WHERE id = ?').run(u.id);
+      db.prepare('UPDATE users SET locked_permanent = 0, locked_until = NULL WHERE id = ?').run(u.id);
       db.prepare("DELETE FROM login_logs WHERE username = ? AND status = 'fail'").run(u.username);
     }
     res.json({ ok: true });
@@ -104,6 +104,7 @@ module.exports = function (ctx) {
       beian: getSetting('beian', ''),
       external_base_url: getSetting('external_base_url', ''),
       local_base_url: getSetting('local_base_url', ''),
+      default_theme: getSetting('theme:default', 'dark'),
     });
   });
   r.post('/settings/system', admin, (req, res) => {
@@ -111,6 +112,11 @@ module.exports = function (ctx) {
     if (b.beian !== undefined) setSetting('beian', String(b.beian).trim().slice(0, 60));
     if (b.external_base_url !== undefined) setSetting('external_base_url', String(b.external_base_url).trim().slice(0, 200).replace(/\/+$/, ''));
     if (b.local_base_url !== undefined) setSetting('local_base_url', String(b.local_base_url).trim().slice(0, 200).replace(/\/+$/, ''));
+    // 站点默认风格：只管「从未自己选过」的用户；选了的人保存在 theme:u<id>，不受影响
+    if (b.default_theme !== undefined) {
+      if (!['dark', 'light', 'purple', 'green'].includes(b.default_theme)) return res.status(400).json({ error: '未知主题' });
+      setSetting('theme:default', b.default_theme);
+    }
     res.json({ ok: true });
   });
   r.get('/settings/lan-addrs', admin, (req, res) => {

@@ -172,6 +172,17 @@ try {
   ok('B6 详情三栏数据齐', det.status === 200 && det.json.masked_text.includes(phoneCode) && det.json.mapping.length >= 2 && Array.isArray(det.json.doc.meta_report) && det.json.doc.meta_report.length >= 2);
   const hist = await req('GET', '/api/history?scope=file', { token: tk });
   ok('B7 脱敏入历史 scope=file', hist.json.total >= 2, `total=${hist.json.total}`);
+  const b8 = await req('GET', '/api/engines/options', { token: tk });
+  const optIds = (b8.json.options || []).map((o) => o.id);
+  ok('B8 文件页引擎下拉含内置与外部文本引擎、不含工具类',
+    b8.status === 200 && optIds[0] === 'builtin' && optIds.includes('presidio') && !optIds.includes('cloakdb') && !(b8.json.options || []).some((o) => o.kind === 'tool'),
+    `status=${b8.status} ${optIds.join(',')}`);
+  const b9 = await req('POST', `/api/documents/${docId}/mask`, { token: tk, body: { engine: 'builtin' } });
+  const det9 = await req('GET', `/api/documents/${docId}`, { token: tk });
+  ok('B9 选内置引擎脱敏并落库', b9.status === 200 && det9.json.doc.mask_engine === 'builtin' && codeOf(b9.json, PHONE) === phoneCode);
+  const b10 = await req('POST', `/api/documents/${docId}/mask`, { token: tk, body: { engine: 'no-such-engine' } });
+  const det10 = await req('GET', `/api/documents/${docId}`, { token: tk });
+  ok('B10 未知引擎回落到跟随全局（不落非法值）', b10.status === 200 && det10.json.doc.mask_engine === '');
 
   console.log('C. 外部 AI 往返（桩 AI 收到的只能有码文）');
   const c1 = await req('POST', `/api/documents/${docId}/ai`, { token: tk, body: { instruction: '请总结要点。' } });
@@ -251,6 +262,7 @@ try {
   const agTok = f1.json.token, agId = f1.json.id;
   const p6 = await page('/s/' + agTok);
   ok('F2 Agent 页只有引导语+回文框', p6.status === 200 && p6.text.includes('Agent 回文通道') && !p6.text.includes(PHONE));
+  ok('F2b Agent 引导语不再要求「不要粘贴敏感信息」', !p6.text.includes('请注意不要在这里粘贴任何未脱敏的敏感信息'));
   const mdText = `**结论**\n- 项目可行\n- 请补充 ${orgCode} 的资料`;
   const f3 = await req('POST', `/api/pub/write/${agTok}`, { body: { content: mdText } });
   ok('F3 Agent 回文写入 200', f3.status === 200);

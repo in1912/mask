@@ -103,10 +103,11 @@ module.exports = function (aesKey) {
     return { total, page, size, rows: rows.map((r) => ({ ...r, password: r.password_enc ? secret.dec(aesKey, r.password_enc) : null })) };
   }
 
-  // ---- 账号锁：15 分钟内 5 次失败临时拒，10 次永久锁 ----
-  function recentFails(username) {
+  // ---- 账号锁：窗口内输错次数（v1.01 起默认 30 分钟 3 次，锁 30 分钟）----
+  function recentFails(username, minutes = 30) {
+    const m = Math.max(1, Number(minutes) || 30);
     return db.prepare(
-      "SELECT COUNT(*) AS c FROM login_logs WHERE username = ? AND status = 'fail' AND at >= datetime('now','localtime','-15 minutes')"
+      `SELECT COUNT(*) AS c FROM login_logs WHERE username = ? AND status = 'fail' AND at >= datetime('now','localtime','-${m} minutes')`
     ).get(username).c;
   }
 

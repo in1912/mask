@@ -78,6 +78,9 @@ module.exports = function (ctx) {
 
     // ---- 脱敏：会话级持久对照表（同一实体全程同码）----
     const cfg = loadCfg(uid);
+    // engine：本页下拉选的引擎（'builtin' | 外部 id）；空 = 跟随全局配置
+    const asked = String(body.engine || '').trim();
+    const chosen = engines.textEngineOptions().some((o) => o.id === asked) ? asked : '';
     const useMask = !!body.desensitize;
     const map = new Map();
     let skipped = !useMask;
@@ -88,7 +91,7 @@ module.exports = function (ctx) {
       const preCount = map.size;
       const firstUser = [...msgs].reverse().find((m) => m.role === 'user');
       try {
-        const probe = await engines.runMask(firstUser.content, cfg, map); // 单独探测开关状态
+        const probe = await engines.runMask(firstUser.content, cfg, map, undefined, { engine: chosen }); // 单独探测开关状态
         if (probe.skipped) { skipped = true; skipReason = probe.reason; }
       } catch (e) {
         // 外部引擎失败：红线——绝不把原文放给 AI，如实退出
@@ -101,7 +104,7 @@ module.exports = function (ctx) {
     for (const m of msgs) {
       if (!skipped) {
         try {
-          const e = await engines.runMask(m.content, cfg, map);
+          const e = await engines.runMask(m.content, cfg, map, undefined, { engine: chosen });
           outMsgs.push({ role: m.role, content: e.masked });
         } catch (err) {
           return res.status(502).json({ error: `脱敏引擎失败：${err.message}` });
@@ -140,9 +143,10 @@ module.exports = function (ctx) {
 
     // 本轮实际参与识别的引擎（界面要如实显示，不能只说「已脱敏」）
     const engineUsed = skipped ? '' : (() => {
+      const nm = (id) => (engines.ENGINES.find((e) => e.id === id) || {}).name || id;
+      if (chosen) return chosen === 'builtin' ? '内置规则引擎（本页所选）' : `${nm(chosen)}（本页所选）`;
       const all = engines.getCfg();
       const ids = engines.activeExternalEngines();
-      const nm = (id) => (engines.ENGINES.find((e) => e.id === id) || {}).name || id;
       if (!ids.length) return '内置规则引擎';
       if (all.mode === 'primary') return `${nm(ids[0])}（外部主引擎）`;
       return `内置规则 + ${ids.map(nm).join(' + ')}（并行）`;

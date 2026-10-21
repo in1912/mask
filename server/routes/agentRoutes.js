@@ -3,9 +3,17 @@
 // 语义：链接页只有引导语 + 回文框；写入只存码文/文本，解码只发生在主人侧
 const express = require('express');
 const { db } = require('../db');
+const { buildZip } = require('../services/zipService');
 const { newToken, baseUrl, agentGuide } = require('./shareUtil');
 
 const SIZES = [5, 15, 30, 50, 100];
+const MAX_EXPORT = 100;
+
+// 备注名 → 安全的 txt 文件名（保留中文，去掉路径/保留字符）
+function safeName(s, fallback) {
+  const t = String(s || '').replace(/[\\/:*?"<>|\r\n\t]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 60);
+  return t || fallback;
+}
 
 function ownLink(req, res) {
   const l = db.prepare('SELECT * FROM links WHERE id = ?').get(Number(req.params.id));
@@ -37,12 +45,59 @@ module.exports = function () {
     const clause = mine ? "WHERE l.created_by = ? AND l.kind = 'agent'" : "WHERE l.kind = 'agent'";
     const args = mine ? [req.user.username] : [];
     const total = db.prepare(`SELECT COUNT(*) AS c FROM links l ${clause}`).get(...args).c;
-    const rows = db.prepare(`SELECT l.id, l.token, l.expires_at, l.revoked, l.created_by, l.created_at AS at,
+    const rows = db.prepare(`SELECT l.id, l.token, l.remark, l.expires_at, l.revoked, l.created_by, l.created_at AS at,
       (SELECT COUNT(*) FROM link_writes w WHERE w.link_id = l.id) AS writes,
       (SELECT MAX(w.created_at) FROM link_writes w WHERE w.link_id = l.id) AS last_write
       FROM links l ${clause} ORDER BY l.id DESC LIMIT ? OFFSET ?`)
       .all(...args, size, (page - 1) * size);
     res.json({ total, page, size, rows: rows.map((x) => ({ ...x, url: `${baseUrl(req)}/s/${x.token}` })) });
+  });
+
+  // 备注名（每个链接自己起，列表里排在创建时间后面）
+  r.put('/agents/:id', (req, res) => {
+    const l = ownLink(req, res); if (!l) return;
+    const remark = String((req.body || {}).remark ?? '').trim().slice(0, 60);
+    db.prepare('UPDATE links SET remark = ? WHERE id = ?').run(remark || null, l.id);
+    res.json({ ok: true, remark });
+  });
+
+  // 批量导出回文：选中一个 → 单个 txt；多个 → zip（每个链接一个 txt，文件名=备注名）
+  r.get('/agents/export', (req, res) => {
+    const ids = [...new Set(String(req.query.ids || '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, MAX_EXPORT);
+    if (!ids.length) return res.status(400).json({ error: '请先勾选要下载的链接' });
+    const links = [];
+    for (const id of ids) {
+      const l = db.prepare("SELECT * FROM links WHERE id = ? AND kind = 'agent'").get(id);
+      if (!l) return res.status(404).json({ error: `链接 #${id} 不存在` });
+      if (req.user.role !== 'admin' && l.created_by !== req.user.username) return res.status(403).json({ error: '无权导出他人链接' });
+      links.push(l);
+    }
+    const used = new Map();
+    const one = (l) => {
+      const base = safeName(l.remark, `agent-${l.id}`);
+      const n = (used.get(base) || 0) + 1;
+      used.set(base, n);
+      const writess = db.prepare('SELECT id, content, word_count, created_at AS at FROM link_writes WHERE link_id = ? ORDER BY id').all(l.id);
+      const head = [
+        `备注：${l.remark || '（未命名）'}`,
+        `地址：${baseUrl(req)}/s/${l.token}`,
+        `创建时间：${l.created_at}`,
+        `回文数：${writess.length}`,
+        '',
+      ].join('\n');
+      const body = writess.length
+        ? writess.map((w) => `===== 回文 #${w.id} · ${w.at} · ${w.word_count} 字 =====\n${w.content}`).join('\n\n')
+        : '（暂无回文）';
+      return { name: `${base}${n > 1 ? `-${n}` : ''}.txt`, text: head + '\n' + body + '\n' };
+    };
+    const files = links.map(one);
+    if (files.length === 1) {
+      res.type('text/plain; charset=utf-8').attachment(files[0].name).send(files[0].text);
+      return;
+    }
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+    const zip = buildZip(files.map((f) => ({ name: f.name, data: Buffer.from(f.text, 'utf8') })));
+    res.type('application/zip').attachment(`agent回文-${stamp}.zip`).send(zip);
   });
 
   r.get('/agents/:id/writes', (req, res) => {

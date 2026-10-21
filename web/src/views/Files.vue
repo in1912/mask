@@ -18,6 +18,8 @@ const wrapEl = ref(null);
 const instruction = ref('请总结这份文档的要点。');
 const aiBusy = ref(false);
 const selReply = ref(0);
+const engineOpts = ref([]);   // 文件脱敏可选引擎（内置 + 外部文本引擎）
+const engSel = ref('');       // '' = 跟随全局配置
 
 // 分享弹层
 const shareDlg = ref(null);   // {days, url, pair_url, write_url, guide, expires_hint, ...}
@@ -35,7 +37,11 @@ async function load() {
 }
 async function openDoc(id) {
   cur.value = await api('/documents/' + id);
-  selReply.value = 0;
+  // 默认展示外部 agent 通过链接写入的回文；没有外部回文才退回最近一条
+  const list = cur.value.replies || [];
+  const ext = list.findIndex((r) => r.source === 'share');
+  selReply.value = ext >= 0 ? ext : 0;
+  engSel.value = cur.value.doc.mask_engine || '';
 }
 async function upload() {
   const f = fileEl.value.files[0];
@@ -56,7 +62,9 @@ async function upload() {
 }
 async function doMask(id) {
   try {
-    const out = await api(`/documents/${id}/mask`, { method: 'POST', body: {} });
+    // 详情打开时用下拉选中的引擎；列表里直接点则沿用该文档上次保存的选择
+    const engine = cur.value && cur.value.doc.id === id ? engSel.value : undefined;
+    const out = await api(`/documents/${id}/mask`, { method: 'POST', body: engine === undefined ? {} : { engine } });
     if (out.skipped) { say('未脱敏：' + out.reason); return; }
     say(`已脱敏 ${out.count} 项（同实体同码，重复执行不换码）`);
     await load();
@@ -81,6 +89,11 @@ async function del(id) {
 }
 function dl(id, which) {
   window.open(`/api/documents/${id}/download?which=${which}&token=${encodeURIComponent(token())}`, '_blank');
+}
+async function shareRow(d) {
+  await openDoc(d.id);
+  if (!cur.value || !cur.value.masked_text) { say('先脱敏才能分享（分享页只包含码文）'); return; }
+  shareDlg.value = { pending: true };
 }
 async function makeShare() {
   if (!cur.value) return;
@@ -130,7 +143,14 @@ function goPage(p) {
 }
 function setSize(s) { size.value = s; page.value = 1; load(); }
 
-onMounted(load);
+async function loadEngineOpts() {
+  try {
+    const out = await api('/engines/options');
+    engineOpts.value = out.options || [];
+  } catch { engineOpts.value = []; } // 选项拉不到不影响脱敏，后端仍按全局配置跑
+}
+
+onMounted(() => { load(); loadEngineOpts(); });
 </script>
 
 <template>
@@ -151,7 +171,7 @@ onMounted(load);
 
     <table class="tbl">
       <thead><tr>
-        <th>日期时间</th><th>用户</th><th>文档名</th><th>文档类型</th><th>匹配项数</th><th>回文</th><th style="width:290px">操作</th>
+        <th>日期时间</th><th>用户</th><th>文档名</th><th>文档类型</th><th>匹配项数</th><th>回文</th><th style="width:370px">操作</th>
       </tr></thead>
       <tbody>
         <tr v-if="!rows.length"><td colspan="7" class="mut" style="text-align:center;padding:26px">还没有文档，点左上「上传文档」开始</td></tr>
@@ -166,6 +186,7 @@ onMounted(load);
             <button class="mini" title="下载原文" @click="dl(d.id, 'raw')"><span class="material-icons">download</span>原文</button>
             <button class="mini" title="执行/刷新脱敏" @click="doMask(d.id)"><span class="material-icons">theater_comedy</span>脱敏</button>
             <button class="mini" title="下载最近一次 AI 回文（已复原）" :disabled="!d.reply_count" @click="dl(d.id, 'restored')"><span class="material-icons">reply</span>回文</button>
+            <button class="mini" title="分享这份脱敏文档给外部 agent" :disabled="!d.masked" @click="shareRow(d)"><span class="material-icons">share</span>分享</button>
             <button class="mini danger" title="删除" @click="del(d.id)"><span class="material-icons">delete</span></button>
           </td>
         </tr>
@@ -182,6 +203,13 @@ onMounted(load);
         <b>{{ cur.doc.filename }}</b>
         <span v-for="it in cur.doc.meta_report" :key="it.rule" class="tag ok">{{ it.rule }}×{{ it.count }}</span>
         <span class="grow"></span>
+        <label class="eng-pick">脱敏引擎
+          <select class="pgsize" v-model="engSel">
+            <option value="">跟随全局</option>
+            <option v-for="o in engineOpts" :key="o.id" :value="o.id">{{ o.name }}</option>
+          </select>
+        </label>
+        <button class="btn" @click="doMask(cur.doc.id)"><span class="material-icons">theater_comedy</span>脱敏</button>
         <button class="btn" @click="openDoc(cur.doc.id)"><span class="material-icons">refresh</span>刷新</button>
         <button class="btn" @click="makeShare" :disabled="shareBusy || !cur.masked_text"><span class="material-icons">share</span>分享…</button>
       </div>
@@ -199,16 +227,19 @@ onMounted(load);
         <div class="vsplit" @pointerdown="startDrag(1, $event)"></div>
         <section class="pane" :style="{ width: panes[2] + '%' }">
           <h4>外部 AI 返回（已按对照表复原）</h4>
-          <div class="ai-box">
-            <textarea v-model="instruction" placeholder="给外部 AI 的指令（会连同码文一起发送）"></textarea>
-            <button class="btn primary" :disabled="aiBusy || !cur.masked_text" @click="sendAi">
-              {{ aiBusy ? '等待 AI…' : '发送给外部 AI' }}
-            </button>
-            <p v-if="!cur.masked_text" class="mut" style="font-size:12px;margin:4px 0 0">先脱敏才能发送——原文绝不直接出网。</p>
-          </div>
+          <details class="ai-fold">
+            <summary>内置 AI 分析</summary>
+            <div class="ai-box">
+              <textarea v-model="instruction" placeholder="给内置 AI 的指令（会连同码文一起发送到本系统配置的 AI 接口）"></textarea>
+              <button class="btn primary" :disabled="aiBusy || !cur.masked_text" @click="sendAi">
+                {{ aiBusy ? '分析中…' : '内置AI分析' }}
+              </button>
+              <p v-if="!cur.masked_text" class="mut" style="font-size:12px;margin:4px 0 0">先脱敏才能发送——原文绝不直接出网。</p>
+            </div>
+          </details>
           <div v-if="cur.replies.length" class="replies">
             <div v-for="(rp, i) in cur.replies" :key="rp.id" class="reply-item" :class="{ on: i === selReply }" @click="selReply = i">
-              <span class="tag" :class="rp.source === 'share' ? 'ok' : ''">{{ rp.source === 'share' ? '分享页回文' : '本页发送' }}</span>
+              <span class="tag" :class="rp.source === 'share' ? 'ok' : ''">{{ rp.source === 'share' ? '外部 agent 回文' : '内置 AI 分析' }}</span>
               <span class="mut" style="font-size:12px">{{ rp.at }}</span>
             </div>
             <pre>{{ cur.replies[selReply] ? cur.replies[selReply].restored_text : '' }}</pre>
@@ -264,14 +295,18 @@ onMounted(load);
 
 .detail { border-top: 1px dashed var(--line); padding-top: 12px; }
 .detail-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.eng-pick { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--mut); }
 .panes3 { display: flex; gap: 0; height: 46vh; min-height: 300px; }
 .pane { min-width: 14%; overflow: auto; display: flex; flex-direction: column; }
 .pane h4 { margin: 0 0 6px; font-size: 13px; color: var(--mut); }
 .pane pre { margin: 0; flex: 1; overflow: auto; background: var(--panel2, rgba(127, 127, 127, .08)); border-radius: 8px; padding: 10px; white-space: pre-wrap; word-break: break-all; font-size: 12.5px; line-height: 1.6; }
 .vsplit { flex: 0 0 7px; cursor: col-resize; border-left: 1px solid var(--line); border-right: 1px solid var(--line); margin: 0 3px; border-radius: 3px; }
 .vsplit:hover, .vsplit:active { background: var(--hover, rgba(127, 127, 127, .2)); }
-.ai-box { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
-.ai-box textarea { flex: 1; min-height: 44px; resize: vertical; }
+.ai-fold { margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.ai-fold summary { cursor: pointer; font-size: 13px; color: var(--mut); user-select: none; }
+.ai-fold[open] summary { margin-bottom: 8px; color: var(--fg); }
+.ai-box { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; flex-wrap: wrap; }
+.ai-box textarea { flex: 1; min-width: 180px; min-height: 44px; resize: vertical; }
 .replies { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .replies pre { flex: 1; }
 .reply-item { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
