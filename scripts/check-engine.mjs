@@ -58,7 +58,7 @@ console.log('B. 对照表持久（同一实体同码）');
 
 console.log('C. 人名/公司/部门启发式');
 {
-  const s = '“张三丰”与“张三”都在场，还有 王总 和 联系人：王建国';
+  const s = '联系人：张三丰；备用联系人：张三；还有 王总 和 联系人：王建国';
   const r = E.encode(s, {});
   const c1 = codeOf(r.mapping, '张三丰'), c2 = codeOf(r.mapping, '张三');
   t('C1 长词不被短词吃掉（两个独立码）', c1 && c2 && c1 !== c2, r.mapping.map(e=>e.term));
@@ -164,7 +164,7 @@ console.log('I. 目录与边界');
   t('I3 无命中返回原文', E.encode('今天天气不错', {}).masked === '今天天气不错');
 }
 
-console.log('J. 人名四路识别（v0.3.0：起因=例会纪要人名全漏 + 上周工作误报成周工）');
+console.log('J. 人名两路识别（v0.3.0 起；v1.03 删掉按姓氏拆字的引号/列表两路，只留称谓+角色锚定）');
 {
   // 真实例会纪要片段（脱敏过的用户文档，2026-10-20 报障）
   const minutes = '参会人员：\n温培泉、刘立伟、刘艺彬(请假)\n主 持 人：\n温培泉\n会议记录：\n刘立伟\n会议主题：\n上周工作\n本周工作\n会议内容：\n1、\nOA搭建测试服务器\n温培泉、刘立伟\n7、\n解决8月份数据渠道存在空的数据\n刘艺彬\n10、\n泛微及金蝶接口费用开始走付款流程\n';
@@ -201,7 +201,7 @@ console.log('K. 合同落款与账号（v1.01：起因=用户报「代表签字/
     && /^代表签字： \[人名[0-9A-Z]+\] *$/.test(lines[1])
     && !r.masked.includes('陈毅') && !r.masked.includes('冯春民'), lines.slice(0, 2));
   t('K2 15 位账号被脱敏', /^帐    号：\[银行账号[0-9A-Z]+\]$/.test(lines[2]), lines[2]);
-  t('K3 带分组空格的账号整段脱敏（不留数字碎片）', /^帐   号： \[银行账号[0-9A-Z]+\]$/.test(lines[3]) && !/\d/.test(lines[3]), lines[3]);
+  t('K3 带分组空格的账号整段脱敏（不留数字碎片）', /^帐   号： \[银行账号[0-9A-Z]+\]$/.test(lines[3]) && !['4884', '7065', '5042'].some((d) => lines[3].includes(d)), lines[3]);
   t('K4 两个 18 位统一社会信用代码都被脱敏', lines.slice(4).every((l) => /^纳税人识别号：\[(信用代码|税号)[0-9A-Z]+\]$/.test(l)), lines.slice(4));
   t('K5 解码还原原文逐字节一致', E.decode(r.masked, r.mapping).restored === contract);
   // 校验位不过的 18 位数字不误报（同长度、无非字母，Luhn 也不成立）
@@ -210,6 +210,28 @@ console.log('K. 合同落款与账号（v1.01：起因=用户报「代表签字/
   t('K7 旧 15 位税号按锚点脱敏', /^税号：\[税号[0-9A-Z]+\]$/.test(E.encode('税号：350101123456789', {}).masked), E.encode('税号：350101123456789', {}).masked);
   // 落款人名确认后全篇传播（甲乙方签署页常把名字再写一次）
   t('K8 落款人名全篇传播', E.encode('代表签字：陈毅\n陈毅 身份证见附件', {}).masked.includes('陈毅') === false);
+}
+
+console.log('L. 带编号的账号栏与锚点地址（v1.03：用户报「账  号2」「地址：」未脱）');
+{
+  const s = '账  号2：32250198863600000746\n地址： 浙江省宁波高新区衡春四季里6幢39号3-3';
+  const r = E.encode(s, {});
+  const lines = r.masked.split('\n');
+  t('L1 关键词后带编号的账号栏仍识别（账  号2：）', /^账  号2：\[银行账号[0-9A-Z]+\]$/.test(lines[0]) && !r.masked.includes('32250198863600000746'), lines[0]);
+  t('L2 无「路」字的锚点地址被脱敏', /^地址： \[地址[0-9A-Z]+\]$/.test(lines[1]) && !r.masked.includes('衡春四季里'), lines[1]);
+  t('L3 解码还原逐字节一致', E.decode(r.masked, r.mapping).restored === s);
+  t('L4 「地址：见附件/无」占位词不误脱', E.encode('地址：见附件', {}).masked === '地址：见附件' && E.encode('地址：无', {}).masked === '地址：无');
+  t('L5 带路名的地址照旧脱敏', E.encode('收货地址：浙江省杭州市西湖区文三路100号', {}).masked.includes('文三路') === false);
+  // v1.03 人名：不再按姓氏拆字（用户 2026-10-21 报「万店掌系/方按年支/伍拾捌万」等整句碎片被当人名）
+  const frag = '本协议约定伍拾捌万元整，陆拾元整；万店掌系统框架合同；于各类半导体设备；甲方按年支付，乙方开具合同；浙江省宁波；长焦镜头；向甲方提供';
+  t('L6 合同正文不再被拆成 3~4 字「人名」', E.encode(frag, {}).mapping.every((e) => e.key !== 'person'), E.encode(frag, {}).mapping.map((e) => e.term));
+  t('L7 引号里的品牌不当人名', E.encode('采购「万店掌」与「海康威视」', {}).mapping.every((e) => e.key !== 'person'), E.encode('采购「万店掌」与「海康威视」', {}).mapping);
+  t('L8 锚点名单仍整串识别（温培泉/刘立伟/刘艺彬）', ['温培泉', '刘立伟', '刘艺彬'].every((n) => E.encode('参会人员：温培泉、刘立伟、刘艺彬(请假)', {}).mapping.some((e) => e.term === n)));
+  // 外部引擎人名常识闸：真名放行，碎片拒绝
+  t('L9 外部人名常识闸：真名通过 / 碎片拒绝',
+    ['陈毅', '冯春民', '温培泉', '王建国', '欧阳娜娜'].every((n) => E.plausiblePerson(n))
+    && ['万店掌系', '方按年支', '伍拾捌万', '陆拾元整', '焦镜头', '江省宁波', '于各类半'].every((n) => E.plausiblePerson(n) === false),
+    ['万店掌系', '方按年支', '伍拾捌万', '焦镜头'].map((n) => E.plausiblePerson(n)));
 }
 
 console.log(`\n结果：${pass}/${pass + fail}`);

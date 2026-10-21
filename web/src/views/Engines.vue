@@ -3,6 +3,18 @@
 // 内容与原来一致：外部引擎依赖安装 / 工作模式 / 引擎卡片 / 探测 / 试跑 / 边车地址。
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { api } from '../api.js';
+import RulesPanel from './Rules.vue';
+
+// v1.03：第二个页签「内置引擎参数配置」= 原一级菜单「规则配置」整块迁入
+const TABS = [
+  { id: 'engine', label: '引擎与依赖' },
+  { id: 'rules', label: '内置引擎参数配置' }
+];
+const tab = ref(localStorage.getItem('mask_eng_tab') === 'rules' ? 'rules' : 'engine');
+function switchTab(id) {
+  tab.value = id;
+  localStorage.setItem('mask_eng_tab', id);
+}
 
 const eng = ref({ config: { mode: 'primary', primary: 'builtin', enabled: {}, commands: {}, sidecar_url: '' }, engines: [] });
 const engVisible = ref([]); // hidden 引擎（自检用）不上 UI
@@ -144,6 +156,11 @@ onUnmounted(stopSetupPolling);
     <div class="page-title">脱敏引擎</div>
     <div v-if="forbidden" class="card empty">{{ forbidden }}</div>
     <template v-else>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+        <button v-for="t in TABS" :key="t.id" class="btn sm" :class="{ primary: tab === t.id }" @click="switchTab(t.id)">{{ t.label }}</button>
+      </div>
+
+      <template v-if="tab === 'engine'">
       <p class="mut" style="margin:-4px 0 14px;font-size:13px">
         当前：<b>{{ eng.config.mode === 'parallel' ? '并行使用' : '主引擎' }}</b> · {{ primaryName }}
         <span v-if="eng.config.mode === 'parallel'" class="mut">（勾选的引擎结果合并去重）</span>
@@ -273,6 +290,8 @@ onUnmounted(stopSetupPolling);
         <p v-else class="err">{{ engTestOut.error }}</p>
       </div>
       <p class="mut" style="font-size:12px;margin-top:10px">红线：所有引擎都在本机运行，原文不出网；引擎失败会如实报错、不会假装脱敏成功。项目引用的开源引擎都会出现在「系统设置 → 致谢」页。</p>
+      </template>
+      <RulesPanel v-else />
     </template>
   </div>
 </template>

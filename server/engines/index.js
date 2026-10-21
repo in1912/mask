@@ -279,9 +279,13 @@ function locateEntities(text, entities) {
 function toCandidates(text, entities, engineId) {
   const out = [];
   for (const it of locateEntities(text, entities)) {
+    const key = TYPE_MAP[it.type] || 'ext';
+    // v1.03：外部模型常把整句拆成 3~4 字「人名」。人名结果过一道常识闸，
+    // 明显不是名字的直接丢弃（宁可漏一个生僻名，也不毁整句语义）。
+    if (key === 'person' && !builtin.plausiblePerson(it.term)) continue;
     out.push({
       term: it.term, start: it.start, end: it.end,
-      key: TYPE_MAP[it.type] || 'ext', prio: 61, ext_engine: engineId, ext_type: it.type,
+      key, prio: 61, ext_engine: engineId, ext_type: it.type,
     });
   }
   return out;

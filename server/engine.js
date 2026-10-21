@@ -29,6 +29,22 @@ const SUR2 = SUR + '温鲁滕葛易常齐康伍涂颜宫宁栾厉蒲路祖班惠
 const NAME_STOP = ['工作', '公司', '部门', '系统', '平台', '项目', '会议', '数据', '服务', '汇报', '纪要', '流程', '功能', '成本', '预算', '计划', '方案', '进度', '需求', '问题', '风险', '客户', '产品', '运营', '管理', '研发', '测试', '环境', '版本', '接口', '服务器', '代码', '账号', '密码', '报表', '日报', '周报', '月报', '合同', '订单', '财务', '人事', '行政', '采购', '实施', '培训', '优化', '迁移', '搭建', '沟通', '处理', '解决', '准备', '整理', '打印', '订购', '报错', '切换', '修改', '安装', '拷贝', '建立', '整合', '运维', '机房', '网络', '安全', '权限', '架构', '数据库', '日志', '监控', '工单', '值班', '考勤', '绩效', '考核', '奖金', '报销', '差旅', '驻场', '售前', '售后', '商务', '法务', '合规', '审计', '税务', '发票', '回款', '付款', '转账', '对账', '结算', '上午', '下午', '晚上', '周一', '周二', '周三', '周四', '周五', '周六', '周日', '本周', '上周', '下周', '金蝶', '用友', '泛微', '钉钉', '飞书', '影刀', '华为', '高德', '万科', '平安'];
 const TITLE = '(?:先生|女士|老师|教授|医生|工程师|经理|总监|主管|科长|部长|董事长|总经理|律师|会计师|分析师|设计师|总|工)';
 
+// v1.03：外部引擎的人名结果也要过一道常识闸。起因=GLiNER 这类模型会把合同里的
+// 「万店掌系」「方按年支」「伍拾捌万」当成 PERSON，码一打，整句语义就毁了。
+// 规则：2~4 字；4 字只认复姓（欧阳/司马…）或带间隔号（少数民族音译）；
+// 姓氏之后的字里出现虚词/动词/量词/财务大写数字等「几乎不会进名字」的字就拒绝。
+// 宁可漏掉极少数生僻真名，也不把一句话拆成四段人名（用户 2026-10-21 明确取舍）。
+const NAME_BAD_CHARS = new Set('的了和与及或按各类于向对为是在有就都也还很不没这那其之者所被把让给从由而且并但可需要应当须将已未等系移硬拾捌仟整省镜页诉门店铺甲乙方开具提行项确认收组织验承担协商售装时转履护测签章掌');
+const COMPOUND_SUR = ['欧阳', '太史', '端木', '上官', '司马', '东方', '独孤', '南宫', '万俟', '闻人', '夏侯', '诸葛', '尉迟', '公羊', '赫连', '澹台', '皇甫', '宗政', '濮阳', '公冶', '太叔', '申屠', '公孙', '慕容', '仲孙', '钟离', '长孙', '宇文', '司徒', '鲜于', '司空', '闾丘', '子车', '亓官', '司寇', '巫马', '公西', '颛孙', '壤驷', '公良', '漆雕', '乐正', '宰父', '谷梁', '拓跋', '夹谷', '轩辕', '令狐', '段干', '百里', '呼延', '东郭', '南门', '羊舌', '微生', '梁丘', '左丘', '西门', '第五', '公乘', '即墨', '达奚'];
+function plausiblePerson(term) {
+  const s = String(term || '').trim();
+  if (s.length < 2 || s.length > 4) return false;
+  if (/[·•]/.test(s)) return true;
+  if (s.length === 4 && !COMPOUND_SUR.some((p) => s.startsWith(p))) return false;
+  for (const ch of s.slice(1)) if (NAME_BAD_CHARS.has(ch)) return false;
+  return true;
+}
+
 const ORG_SUFFIX = '有限公司|有限责任公司|股份有限公司|集团|银行|证券|保险公司|医院|学校|大学|学院|研究院|研究所|事务所|工作室|合作社';
 const DEPT_SUFFIX = '事业部|分公司|子公司|部门|委员会|办公室|中心|科室|工作组|项目组';
 const LEFT_TRIM = ['我们的', '你们', '他们的', '客户是', '甲方是', '乙方是', '公司是', '供应商是', '来自', '属于', '位于', '叫做', '名为', '以及', '还有', '和', '与', '及', '或', '由', '在', '是', '的'].sort((a, b) => b.length - a.length);
@@ -105,7 +121,10 @@ function spacedKw(kw) {
 }
 function anchorWordsScan(words, valSource, flags = 'gi') {
   const kw = words.map(spacedKw).join('|');
-  return scanRe(`(?:${kw})[ \\t\\u3000]*(?:是|为|[:：])?[ \\t\\u3000]*(${valSource})`, flags, (m) => m[1]);
+  // 关键词后可带编号再跟冒号：「账  号2：」是合同里第二个账户栏的常见写法。
+  // 编号必须带冒号才吃（lookahead），否则「账号 1234567」会被误当成「账号2 + 值」。
+  const idx = '(?:[ \\t\\u3000]*[0-9]{1,2}(?=[ \\t\\u3000]*[:：]))?';
+  return scanRe(`(?:${kw})${idx}[ \\t\\u3000]*(?:是|为|[:：])?[ \\t\\u3000]*(${valSource})`, flags, (m) => m[1]);
 }
 
 const RULES = [
@@ -129,42 +148,35 @@ const RULES = [
     const reT = new RegExp(`[${SUR}][一-龥]{0,2}${TITLE}(?![结体归功能谋作资期共额部])`, 'g');
     let m;
     while ((m = reT.exec(text)) !== null) out.push({ term: m[0], start: m.index, end: m.index + m[0].length });
-    // 2) 引号包裹
-    const reQ = new RegExp(`[「『“"‘']([${SUR2}][一-龥]{1,3})[」』”"’']`, 'g');
-    while ((m = reQ.exec(text)) !== null) {
-      out.push({ term: m[1], start: m.index + 1, end: m.index + 1 + m[1].length });
-      strong.add(m[1]);
-    }
-    // 3) 姓名列表：顿号/逗号分隔 ≥2 项，每项「扩充姓氏+1~2 汉字」，可带（请假/线上）类括注。
-    //    例会纪要/工作日报里人名绝大多数长这样，列表语境本身就是强信号
+    // v1.03 删除两条「按姓氏拆字」的路：
+    //   ①引号包裹：[姓氏字]+1~3 字，报价单里「万店掌」这种品牌一进引号就被当人名；
+    //   ②顿号姓名列表：任意顿号分隔的 2~3 字词组，只要首字碰巧是姓氏就算名字，
+    //     合同里的「伍拾捌万元整，陆拾元整」被拆成「万元整」「陆拾元」。
+    // 汉字里能当姓氏的字太多，按字面拆必然伤语义。用户 2026-10-21 明确要求：
+    // 没有可靠办法就宁可不用。现在只保留有明确语境的两条路：称谓 + 角色锚定。
     const NAME2 = `[${SUR2}][一-龥]{1,2}`;
     const PAREN = '(?:\\s*[（(][^）)\\n]{1,6}[）)])?';
-    const reL = new RegExp(`${NAME2}${PAREN}(?:\\s*[、，,]\\s*${NAME2}${PAREN})+`, 'g');
-    const nameRe = new RegExp(NAME2, 'g');
-    while ((m = reL.exec(text)) !== null) {
-      nameRe.lastIndex = 0;
-      let n;
-      while ((n = nameRe.exec(m[0])) !== null) {
-        if (NAME_STOP.some((w) => n[0].includes(w))) continue;
-        out.push({ term: n[0], start: m.index + n.index, end: m.index + n.index + n[0].length });
-        strong.add(n[0]);
-      }
-    }
-    // 4) 角色锚定：主持人：/责任人：/参会人员： 后面紧跟的姓名。锚定词允许排版空格
-    //    （例会纪要里常被打散成「主 持 人：」）
+    // 2) 角色锚定：主持人：/责任人：/参会人员： 后面紧跟的姓名，以及同一行顿号名单
+    //    （锚点本身就是强语境——「参会人员：温培泉、刘立伟」可以整串认，不做全文扫）。
+    //    锚定词允许排版空格（例会纪要里常被打散成「主 持 人：」）
     // v1.01 补：合同/协议落款最常见的「代表签字：陈毅」「法定代表人：张三」「授权代表：李四」
-    // 之前只认会议纪要那套锚点，合同末尾的人名全漏
     const ANCHORS = ['参会人员', '与会人员', '出席人员', '列席人员', '出席者', '列席者', '与会者', '主持人', '会议记录', '记录人', '汇报人', '责任人', '经办人', '联系人', '对接人', '负责人', '发起人', '审批人', '创建人', '面试官', '主讲人',
       '代表签字', '签字代表', '签字人', '签字', '签名', '签署人', '姓名', '法定代表人', '法人代表', '授权代表', '委托代理人', '代理人', '开户人', '制表人', '审核人', '批准人'];
     const sp = (s) => s.split('').join('\\s*');
-    const reA = new RegExp(`(?:${ANCHORS.map(sp).join('|')})\\s*[:：]\\s*(${NAME2})${PAREN}`, 'g');
+    const reA = new RegExp(`(?:${ANCHORS.map(sp).join('|')})\\s*[:：]\\s*(${NAME2}${PAREN}(?:[ \\t]*[、，,][ \\t]*${NAME2}${PAREN})*)`, 'g');
+    const nameIn = new RegExp(NAME2, 'g');
     while ((m = reA.exec(text)) !== null) {
-      if (NAME_STOP.some((w) => m[1].includes(w))) continue;
-      const off = m.index + m[0].indexOf(m[1]);
-      out.push({ term: m[1], start: off, end: off + m[1].length });
-      strong.add(m[1]);
+      const seg = m[1];
+      const base = m.index + m[0].indexOf(seg);
+      nameIn.lastIndex = 0;
+      let n;
+      while ((n = nameIn.exec(seg)) !== null) {
+        if (NAME_STOP.some((w) => n[0].includes(w))) continue;
+        out.push({ term: n[0], start: base + n.index, end: base + n.index + n[0].length });
+        strong.add(n[0]);
+      }
     }
-    // 5) 确认后全篇传播：strong 里的人名在文档其余位置的出现（如表格里独占一行的责任人）
+    // 3) 确认后全篇传播：strong 里的人名在文档其余位置的出现（如表格里独占一行的责任人）
     //    一并标记。弱信号（姓氏+称谓）不参与——真「周工」不能把「上周工作」带进沟里
     for (const t of strong) {
       let i = 0;
@@ -179,7 +191,15 @@ const RULES = [
   { key: 'email', zh: '邮箱', en: 'MAIL', cat: 'pii', prio: 62, method: 'regex', scan: scanRe('[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}', 'g') },
   { key: 'wechat', zh: '微信', en: 'WX', cat: 'pii', prio: 50, method: 'anchor', scan: anchorScan('(?:微信号|微信ID)', '[A-Za-z][A-Za-z0-9_-]{5,19}') },
   { key: 'qq', zh: 'QQ', en: 'QQ', cat: 'pii', prio: 50, method: 'anchor', scan: anchorScan('(?:QQ|qq|扣扣)(?:号|群)?', '[1-9]\\d{4,10}(?!\\d)') },
-  { key: 'address', zh: '地址', en: 'ADDR', cat: 'pii', prio: 44, method: 'heuristic', hint: '路/街/巷+门牌特征，启发式', scan: scanRe('[一-龥A-Za-z0-9]{2,20}(?:路|街|大道|巷|道)\\s?[0-9一二三四五六七八九十]{1,6}号(?:[0-9]{1,5}(?:栋|幢|室|单元|楼层))?', 'g') },
+  { key: 'address', zh: '地址', en: 'ADDR', cat: 'pii', prio: 44, method: 'heuristic', hint: '路/街/巷+门牌，或「地址：」锚点，启发式', scan: (text) => {
+    const out = scanRe('[一-龥A-Za-z0-9]{2,20}(?:路|街|大道|巷|道)\\s?[0-9一二三四五六七八九十]{1,6}号(?:[0-9]{1,5}(?:栋|幢|室|单元|楼层))?', 'g')(text);
+    // v1.03：小区/里/村这类地址不一定带「路」，有「地址：」锚点就直接取值；
+    // 「无/见附件」这类占位词不脱，避免把「地址：见附件」打成码。
+    for (const a of anchorWordsScan(['通讯地址', '联系地址', '注册地址', '办公地址', '收货地址', '家庭地址', '所在地址', '住址', '地址'], `${V}{4,60}`)(text)) {
+      if (!/^(?:无|暂无|未知|待定|见附件|同上|略|面议)$/.test(a.term)) out.push(a);
+    }
+    return out;
+  } },
   { key: 'birthday', zh: '生日', en: 'BIRTH', cat: 'pii', prio: 42, method: 'anchor', scan: anchorScan('(?:生日|出生日期|出生于|出生)', '(?:19|20)\\d{2}\\s*[年/.-]\\s*\\d{1,2}\\s*[月/.-]\\s*\\d{1,2}\\s*日?', '') },
   { key: 'medical', zh: '病历', en: 'MED', cat: 'pii', prio: 38, method: 'anchor', scan: anchorScan('(?:病历号|门诊号|住院号|体检编号|诊断证明书?号?)', `${V}{4,24}`) },
   { key: 'biometric', zh: '生物', en: 'BIO', cat: 'pii', prio: 38, method: 'dict', scan: scanRe('(?:人脸|指纹|虹膜|声纹)(?:数据|图像|照片|信息|模板|采集样本?)', 'g') },
@@ -516,4 +536,4 @@ function catalog() {
   return cats;
 }
 
-module.exports = { RULES, DEFAULT_CFG, encode, decode, review, catalog, residueRe, ALPHABET };
+module.exports = { RULES, DEFAULT_CFG, encode, decode, review, catalog, residueRe, ALPHABET, plausiblePerson };

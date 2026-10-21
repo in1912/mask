@@ -22,7 +22,7 @@
 
     <div class="card" style="margin-bottom:14px">
       <h3 style="margin-bottom:8px">占位码为什么长这样</h3>
-      <p class="mut" style="margin-bottom:6px">三种编码风格可在「规则配置」切换：</p>
+      <p class="mut" style="margin-bottom:6px">三种编码风格可在「脱敏引擎 → 内置引擎参数配置」切换：</p>
       <ul class="mut" style="padding-left:20px;display:grid;gap:6px">
         <li><b style="color:var(--fg)">A 混合语义码（默认）</b>：<code class="code-chip">[公司A7]</code> —— 保留类别语义，AI 能顺着句子理解「某公司」，语义连贯性最好。</li>
         <li><b style="color:var(--fg)">B 纯序号</b>：<code class="code-chip">[公司1]</code> —— 最短，多实体长文里 AI 需要自己数着记。</li>
@@ -34,8 +34,8 @@
     <div class="card" style="margin-bottom:14px">
       <h3 style="margin-bottom:8px">诚实的边界（当前版本）</h3>
       <ul class="mut" style="padding-left:20px;display:grid;gap:6px">
-        <li>人名、地址、公司名靠<b>启发式</b>识别，可能漏报或误报；关键实体建议加进「固定关键词」。</li>
-        <li>数字一旦脱敏，AI 无法做算术与统计（规则配置页有专门说明）。</li>
+        <li>人名只认<b>称谓</b>（王总/周工）和<b>角色锚定</b>（参会人员：/代表签字：）这两类明确语境——按姓氏猜名字会把「伍拾捌万元整」「万店掌系统」拆成假人名，所以不做；没有锚点的孤立姓名会漏，请加进「固定关键词」。地址、公司名同样是启发式，可能漏报或误报。</li>
+        <li>数字一旦脱敏，AI 无法做算术与统计（「脱敏引擎 → 内置引擎参数配置」页有专门说明）。</li>
         <li>文件脱敏、分享链接、Agent 协同在 P1 版本提供；当前版本支持对话与附件（txt/docx）。</li>
         <li>识别不了的东西就是识别不了——系统不会为了「看起来全」而把整段文字打码。</li>
       </ul>

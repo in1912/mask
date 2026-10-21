@@ -50,9 +50,8 @@ onMounted(load);
 </script>
 
 <template>
+  <!-- v1.03：从一级菜单「规则配置」迁入「脱敏引擎」第二个页签，标题由外层页签承担 -->
   <div v-if="cfg" style="max-width:980px">
-    <div class="page-title">规则配置</div>
-
     <div class="card" style="margin-bottom:14px">
       <div style="display:flex;flex-wrap:wrap;gap:22px;align-items:center">
         <label style="display:flex;gap:8px;align-items:center">
