@@ -130,7 +130,7 @@ async function processJob(jobId) {
       db.prepare(`UPDATE batch_files SET status='done', chars=?, match_count=?, preview_raw=?, preview_masked=?, out_name=? WHERE id = ?`)
         .run(text.length, out.count || 0, (text + note).slice(0, 4000), out.masked.slice(0, 4000), sanitizeBase(f.name) + '.masked.txt', f.id);
       db.prepare('INSERT INTO desens_history (user_id, scope, ref_id, item_count, mapping_json, masked_preview) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(job.user_id, 'batch', jobId, out.count || 0, JSON.stringify(out.mapping || []), out.masked.slice(0, 2000));
+        .run(job.user_id, 'batch', jobId, out.count || 0, JSON.stringify(out.applied || out.mapping || []), out.masked.slice(0, 2000));
     } catch (e) {
       db.prepare("UPDATE batch_files SET status='failed', error=? WHERE id = ?")
         .run(String(e.message || e).slice(0, 300), f.id);

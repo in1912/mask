@@ -112,12 +112,14 @@ module.exports = function (ctx) {
       return res.status(502).json({ error: `脱敏引擎失败：${e.message}` });
     }
     if (out.skipped) return res.json({ skipped: true, reason: out.reason });
+    // 本次真正替换掉的条目（不是整张持久底账）；历史快照只记它
+    const applied = out.applied || out.mapping || [];
     // 新增对照落库
     const up = db.prepare("INSERT OR IGNORE INTO mappings (scope_type, scope_id, code, rule_key, category, style, term) VALUES ('doc', ?, ?, ?, ?, ?, ?)");
-    for (const e of map.values()) up.run(d.id, e.code, e.key, e.cat || null, e.style || 'A', e.term);
+    for (const e of applied) up.run(d.id, e.code, e.key, e.cat || null, e.style || 'A', e.term);
     // 匹配项数报告（按规则归类）
     const byRule = {};
-    for (const e of map.values()) {
+    for (const e of applied) {
       const label = e.key === 'fixed' ? '关键词' : (RULE_ZH[e.key] || e.key || '数值');
       byRule[label] = (byRule[label] || 0) + 1;
     }
@@ -125,8 +127,8 @@ module.exports = function (ctx) {
     db.prepare('UPDATE documents SET masked_text = ?, match_count = ?, meta_report_json = ?, mask_engine = ? WHERE id = ?')
       .run(out.masked, out.count, JSON.stringify(report), chosen || null, d.id);
     db.prepare('INSERT INTO desens_history (user_id, scope, ref_id, item_count, mapping_json, masked_preview) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(d.user_id, 'file', d.id, out.count, JSON.stringify(out.mapping), out.masked.slice(0, 2000));
-    res.json({ masked: out.masked, mapping: out.mapping, count: out.count, report });
+      .run(d.user_id, 'file', d.id, out.count, JSON.stringify(applied), out.masked.slice(0, 2000));
+    res.json({ masked: out.masked, mapping: applied, count: out.count, report });
   });
 
   // ---- 送外部 AI（码文往返；返回前已按对照表复原）----

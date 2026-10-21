@@ -466,7 +466,11 @@ function encode(text, cfg, persisted, extra) {
     const re = new RegExp(sorted.map((e) => esc(e.term)).join('|'), 'g');
     masked = String(text).replace(re, (m) => wrap(byTerm.get(m)));
   }
-  return { masked, mapping: [...map.values()], count: entries.length, added };
+  // mapping 是整张持久底账（decode 复原回复时可能需要引用历史实体）；
+  // applied 才是本次真正在文本里替换掉的条目。历史快照/界面展示必须用 applied，
+  // 否则换引擎或改规则前认错的旧条目（如「章页」「万店掌系」）会永远挂在对照表里。
+  // 底账本身不删，同码不变。
+  return { masked, mapping: [...map.values()], applied: entries, count: entries.length, added };
 }
 
 // ---------------------------------------------------------------------------

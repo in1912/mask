@@ -77,7 +77,19 @@ module.exports = function () {
     const row = db.prepare('SELECT * FROM desens_history WHERE id = ?').get(Number(req.params.id));
     if (!row) return res.status(404).json({ error: '记录不存在' });
     if (req.user.role !== 'admin' && row.user_id !== req.user.id) return res.status(403).json({ error: '无权查看' });
-    res.json({ ...row, mapping: JSON.parse(row.mapping_json || '[]') });
+    let mapping = JSON.parse(row.mapping_json || '[]');
+    // 文件历史：旧快照写的是整张持久底账（v1.03 前的写法），会把换引擎/改规则前的
+    // 错误识别（章页/万店掌系…）一直挂出来。展示时按文档当前状态再过一道：
+    // 原文里有、且当前脱敏文里已经没有。快照本身不改，复核/复原仍用全量 mapping_json。
+    if (row.scope === 'file' && row.ref_id) {
+      const d = db.prepare('SELECT raw_text, masked_text FROM documents WHERE id = ?').get(row.ref_id);
+      if (d) {
+        const raw = String(d.raw_text || '');
+        const maskedNow = String(d.masked_text || '');
+        mapping = mapping.filter((m) => raw.includes(m.term) && !maskedNow.includes(m.term));
+      }
+    }
+    res.json({ ...row, mapping });
   });
 
   // 二次复核：残留代码 / 未引用项 / 结论

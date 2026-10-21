@@ -196,6 +196,33 @@ try {
       det11.status === 200 && !terms11.includes('请尽快') && !terms11.includes('万店掌系') && terms11.includes(PHONE) && terms11.includes(ORG),
       JSON.stringify(terms11));
   }
+  {
+    // B12：重跑只把「本次真的替换掉的」写进响应与历史快照，陈旧底账不再跟着走
+    const b12 = await req('POST', `/api/documents/${docId}/mask`, { token: tk, body: { engine: 'builtin' } });
+    const terms12 = (b12.json.mapping || []).map((m) => m.term);
+    ok('B12 重跑响应只含本次替换项',
+      b12.status === 200 && !terms12.includes('请尽快') && !terms12.includes('万店掌系') && terms12.includes(PHONE) && terms12.includes(ORG),
+      JSON.stringify(terms12));
+    const hist12 = await req('GET', '/api/history?scope=file', { token: tk });
+    const hd12 = await req('GET', '/api/history/' + hist12.json.rows[0].id, { token: tk });
+    const hterms = (hd12.json.mapping || []).map((m) => m.term);
+    ok('B13 历史快照同样不带陈旧条目',
+      hd12.status === 200 && !hterms.includes('请尽快') && !hterms.includes('万店掌系') && hterms.includes(PHONE),
+      JSON.stringify(hterms));
+    // B14：v1.03 前写入的旧快照仍是整张底账，展示时也要过同一道过滤（快照本身不改）
+    const hdb = new DatabaseSync(path.join(dataDir, 'mask.sqlite'));
+    const hi = hdb.prepare("INSERT INTO desens_history (user_id, scope, ref_id, item_count, mapping_json, masked_preview) VALUES (1, 'file', ?, 2, ?, '')")
+      .run(docId, JSON.stringify([
+        { term: '请尽快', code: '人名ZZ', key: 'person', cat: 'pii', style: 'A' },
+        { term: PHONE, code: phoneCode, key: 'phone', cat: 'pii', style: 'A' },
+      ]));
+    const hid = Number(hi.lastInsertRowid);
+    hdb.close();
+    const hd14 = await req('GET', '/api/history/' + hid, { token: tk });
+    const t14 = (hd14.json.mapping || []).map((m) => m.term);
+    ok('B14 旧历史快照展示时过滤陈旧条目（原始快照不删）',
+      hd14.status === 200 && !t14.includes('请尽快') && t14.includes(PHONE), JSON.stringify(t14));
+  }
 
   console.log('C. 外部 AI 往返（桩 AI 收到的只能有码文）');
   const c1 = await req('POST', `/api/documents/${docId}/ai`, { token: tk, body: { instruction: '请总结要点。' } });

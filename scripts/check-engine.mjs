@@ -54,6 +54,12 @@ console.log('B. 对照表持久（同一实体同码）');
   t('B2 第二轮零新增', r2.added === 0, r2.added);
   const r3 = E.encode('新的邮箱 new@example.com 出现', {}, p);
   t('B3 新实体有新码', r3.added === 1 && codeOf(r3.mapping, 'new@example.com') !== codeOf(r3.mapping, '13812345678'), r3.added);
+  // 底账里的旧条目（换引擎/改规则前认错的名字）没参与本次替换，就不该出现在 applied 里
+  const stale = new Map([['章页', { term: '章页', code: '人名6D', key: 'person', cat: 'pii', style: 'A' }]]);
+  const r4 = E.encode('本次只提到 13812345678', {}, stale);
+  t('B4 陈旧底账不进 applied（但仍留在 mapping 供复原）',
+    r4.applied.every((e) => e.term !== '章页') && r4.mapping.some((e) => e.term === '章页') && r4.applied.some((e) => e.term === '13812345678'),
+    JSON.stringify(r4.applied.map((e) => e.term)));
 }
 
 console.log('C. 人名/公司/部门启发式');
