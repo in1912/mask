@@ -190,5 +190,27 @@ console.log('J. 人名四路识别（v0.3.0：起因=例会纪要人名全漏 + 
   t('J10 工资/总共/总部陷阱不误报', trap.mapping.some((e) => e.key === 'person' && ['于工', '张总', '李总'].includes(e.term)) === false, trap.mapping.filter((e) => e.key === 'person'));
 }
 
+console.log('K. 合同落款与账号（v1.01：起因=用户报「代表签字/帐号/纳税人识别号」整段没脱）');
+{
+  // 用户 2026-10-21 报障原文（结构原样保留：锚点里的排版空格、账号里的分组空格）
+  const contract = '代表签字：陈毅\n代表签字： 冯春民     \n帐    号：756082624210001\n帐   号： 4884 7065 5042\n纳税人识别号：91330201758898651N\n纳税人识别号：91320505MA1MK13C82';
+  const r = E.encode(contract, {});
+  const lines = r.masked.split('\n');
+  t('K1 代表签字后的人名被脱敏',
+    /^代表签字：\[人名[0-9A-Z]+\]$/.test(lines[0])
+    && /^代表签字： \[人名[0-9A-Z]+\] *$/.test(lines[1])
+    && !r.masked.includes('陈毅') && !r.masked.includes('冯春民'), lines.slice(0, 2));
+  t('K2 15 位账号被脱敏', /^帐    号：\[银行账号[0-9A-Z]+\]$/.test(lines[2]), lines[2]);
+  t('K3 带分组空格的账号整段脱敏（不留数字碎片）', /^帐   号： \[银行账号[0-9A-Z]+\]$/.test(lines[3]) && !/\d/.test(lines[3]), lines[3]);
+  t('K4 两个 18 位统一社会信用代码都被脱敏', lines.slice(4).every((l) => /^纳税人识别号：\[(信用代码|税号)[0-9A-Z]+\]$/.test(l)), lines.slice(4));
+  t('K5 解码还原原文逐字节一致', E.decode(r.masked, r.mapping).restored === contract);
+  // 校验位不过的 18 位数字不误报（同长度、无非字母，Luhn 也不成立）
+  t('K6 校验位不过的 18 位编号不误报', E.encode('合同附件编号 123456789012345672 已归档', {}).masked === '合同附件编号 123456789012345672 已归档');
+  // 旧 15 位税务登记号走锚点
+  t('K7 旧 15 位税号按锚点脱敏', /^税号：\[税号[0-9A-Z]+\]$/.test(E.encode('税号：350101123456789', {}).masked), E.encode('税号：350101123456789', {}).masked);
+  // 落款人名确认后全篇传播（甲乙方签署页常把名字再写一次）
+  t('K8 落款人名全篇传播', E.encode('代表签字：陈毅\n陈毅 身份证见附件', {}).masked.includes('陈毅') === false);
+}
+
 console.log(`\n结果：${pass}/${pass + fail}`);
 process.exit(fail ? 1 : 0);

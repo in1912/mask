@@ -81,6 +81,33 @@ function luhnOk(s) {
   return sum % 10 === 0;
 }
 
+// 统一社会信用代码（GB 32100-2015）校验位：字符集去 I/O/S/V/Z 共 31 个，模 31。
+// 只认校验通过的 18 位，避免把普通 18 位单号当信用代码。
+const USCC_CHARS = '0123456789ABCDEFGHJKLMNPQRTUWXY';
+const USCC_WEIGHTS = [1, 3, 9, 27, 19, 26, 16, 17, 20, 29, 25, 13, 8, 24, 10, 30, 28];
+function usccOk(s) {
+  const up = String(s).toUpperCase();
+  if (up.length !== 18) return false;
+  let sum = 0;
+  for (let i = 0; i < 17; i++) {
+    const idx = USCC_CHARS.indexOf(up[i]);
+    if (idx < 0) return false;
+    sum += idx * USCC_WEIGHTS[i];
+  }
+  const c = 31 - (sum % 31);
+  return USCC_CHARS[c === 31 ? 0 : c] === up[17];
+}
+
+// 锚定词内部允许排版空格：表单里常见「帐    号：」「纳 税 人 识 别 号：」。
+// 只给纯文字关键词用；带正则语法的关键词仍走 anchorScan，免得把语法拆坏。
+function spacedKw(kw) {
+  return String(kw).split('').map(esc).join('[ \\t\\u3000]*');
+}
+function anchorWordsScan(words, valSource, flags = 'gi') {
+  const kw = words.map(spacedKw).join('|');
+  return scanRe(`(?:${kw})[ \\t\\u3000]*(?:是|为|[:：])?[ \\t\\u3000]*(${valSource})`, flags, (m) => m[1]);
+}
+
 const RULES = [
   // ---- 个人隐私 pii ----
   { key: 'idcard', zh: '身份证', en: 'ID', cat: 'pii', prio: 62, method: 'regex', scan: scanRe('(?<!\\d)[1-9]\\d{5}(?:19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx](?!\\d)', 'g') },
@@ -91,6 +118,9 @@ const RULES = [
   { key: 'tel', zh: '固话', en: 'TEL', cat: 'pii', prio: 56, method: 'regex', scan: scanRe('(?<!\\d)0\\d{2,3}-\\d{7,8}(?!\\d)', 'g') },
   { key: 'bankcard', zh: '银行卡', en: 'BANK', cat: 'pii', prio: 62, method: 'luhn', scan: (text) => { const out = []; const re = /(?<!\d)\d{13,19}(?!\d)/g; let m; while ((m = re.exec(text)) !== null) { if (luhnOk(m[0])) out.push({ term: m[0], start: m.index, end: m.index + m[0].length }); } return out; } },
   { key: 'payacct', zh: '支付账号', en: 'PAY', cat: 'pii', prio: 58, method: 'anchor', scan: anchorScan('(?:支付宝账号|支付宝帐号|支付账号|支付帐号|收款账号)', `${V}{6,30}`) },
+  // 银行账号：优先认「账号/帐号」锚点后的数字串（允许空格/短横分组，如 4884 7065 5042）；
+  // 优先级高于通用 acct（75），否则只会把第一段 4 位数字换掉。
+  { key: 'bankacct', zh: '银行账号', en: 'ACCT', cat: 'pii', prio: 78, method: 'anchor', scan: anchorWordsScan(['银行账号', '银行帐号', '对公账号', '对公帐号', '收款账号', '收款帐号', '账号', '帐号'], '\\d(?:[ \\t-]?\\d){6,29}(?!\\d)') },
   { key: 'person', zh: '人名', en: 'PER', cat: 'pii', prio: 20, method: 'heuristic', hint: '姓氏+称谓/引号/姓名列表/角色锚定启发式，可能漏或误', scan: (text) => {
     const out = [];
     const strong = new Set(); // 强语境（列表/锚定/引号）确认过的人名：全篇其余出现一并入码
@@ -122,7 +152,10 @@ const RULES = [
     }
     // 4) 角色锚定：主持人：/责任人：/参会人员： 后面紧跟的姓名。锚定词允许排版空格
     //    （例会纪要里常被打散成「主 持 人：」）
-    const ANCHORS = ['参会人员', '与会人员', '出席人员', '列席人员', '出席者', '列席者', '与会者', '主持人', '会议记录', '记录人', '汇报人', '责任人', '经办人', '联系人', '对接人', '负责人', '发起人', '审批人', '创建人', '面试官', '主讲人'];
+    // v1.01 补：合同/协议落款最常见的「代表签字：陈毅」「法定代表人：张三」「授权代表：李四」
+    // 之前只认会议纪要那套锚点，合同末尾的人名全漏
+    const ANCHORS = ['参会人员', '与会人员', '出席人员', '列席人员', '出席者', '列席者', '与会者', '主持人', '会议记录', '记录人', '汇报人', '责任人', '经办人', '联系人', '对接人', '负责人', '发起人', '审批人', '创建人', '面试官', '主讲人',
+      '代表签字', '签字代表', '签字人', '签字', '签名', '签署人', '姓名', '法定代表人', '法人代表', '授权代表', '委托代理人', '代理人', '开户人', '制表人', '审核人', '批准人'];
     const sp = (s) => s.split('').join('\\s*');
     const reA = new RegExp(`(?:${ANCHORS.map(sp).join('|')})\\s*[:：]\\s*(${NAME2})${PAREN}`, 'g');
     while ((m = reA.exec(text)) !== null) {
@@ -165,6 +198,19 @@ const RULES = [
   { key: 'pricing', zh: '定价', en: 'PRICE', cat: 'ent', prio: 36, method: 'dict', hint: '词典级，只认关键词本身', scan: scanRe('(?:定价策略|价格策略|底价策略)', 'g') },
   { key: 'order', zh: '订单', en: 'ORD', cat: 'ent', prio: 54, method: 'anchor', scan: anchorScan('(?:订单号|订单编号|运单号|单号)', '[A-Za-z0-9-]{6,32}') },
   { key: 'custno', zh: '客户编号', en: 'CUSNO', cat: 'ent', prio: 54, method: 'anchor', scan: anchorScan('(?:客户编号|客户号|会员号|会员编号)', '[A-Za-z0-9-]{4,32}') },
+  // 统一社会信用代码 / 纳税人识别号（v1.01 补：合同里的 18 位码一直漏脱）
+  // ①无锚点也认：18 位、字符集符合 GB 32100 且校验位通过，几乎不会误报；
+  // ②有「纳税人识别号/税号」等锚点时放宽到 15~20 位字母数字，兼容旧 15 位税务登记号。
+  { key: 'creditcode', zh: '信用代码', en: 'USCC', cat: 'ent', prio: 64, method: 'luhn', scan: (text) => {
+    const out = [];
+    const re = /(?<![0-9A-Za-z])[0-9A-HJ-NPQRTUWXYa-hj-npqrtuwxy]{18}(?![0-9A-Za-z])/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (usccOk(m[0])) out.push({ term: m[0], start: m.index, end: m.index + m[0].length });
+    }
+    return out;
+  } },
+  { key: 'taxid', zh: '税号', en: 'TAX', cat: 'ent', prio: 60, method: 'anchor', scan: anchorWordsScan(['纳税人识别号', '纳税人识别码', '纳税人编码', '统一社会信用代码', '社会信用代码', '信用代码', '税务登记号', '税号'], '[0-9A-Za-z]{15,20}(?![0-9A-Za-z])') },
   { key: 'clause', zh: '条款', en: 'CLAUSE', cat: 'ent', prio: 36, method: 'dict', hint: '词典级，涉密条款语义无法穷举', scan: scanRe('(?:保密条款|排他条款|独家条款|保密期限|涉密等级)', 'g') },
   { key: 'perf', zh: '绩效', en: 'PERF', cat: 'ent', prio: 38, method: 'anchor', scan: anchorScan('(?:绩效分|绩效得分|考核结果|KPI得分?)', `${V}{1,20}`) },
   { key: 'org', zh: '公司', en: 'ORG', cat: 'ent', prio: 46, method: 'heuristic', hint: '公司后缀词锚定，左侧截断虚词', scan: (text) => {
