@@ -78,12 +78,16 @@ module.exports = function (ctx) {
     const d = ownDoc(req, res); if (!d) return;
     // 多取一些：外部 agent 通过分享链接写入的回文不能被内置 AI 的多次调用挤出视野
     const replies = db.prepare('SELECT id, source, raw_return, restored_text, review_json, created_at AS at FROM ai_replies WHERE doc_id = ? ORDER BY id DESC LIMIT 20').all(d.id);
-    // 对照表只回当前原文里真的还有的词。mappings 表是「同实体同码」的持久底账，
-    // 历次换引擎留下的旧条目会一直躺在库里；不过滤的话，用户看到的对照表里会出现
-    // 上一版错误识别的名字（2026-10-21 用户报的就是这个）。底账本身不删，码保持稳定。
+    // 对照表只回「当前脱敏结果里真的被替换掉」的词：原文里有、脱敏文里已不存在。
+    // mappings 表是「同实体同码」的持久底账，历次换引擎留下的旧条目会一直躺在库里；
+    // 不过滤的话，用户看到的对照表里会挂着上一版错误识别的名字（2026-10-21 用户报的
+    // 「万店掌系」就是——旧引擎留下的映射，当前原文里还在、但已经没被脱敏）。
+    // 底账本身不删，同码不变。
+    const raw = String(d.raw_text || '');
+    const maskedNow = String(d.masked_text || '');
     const mapping = db.prepare("SELECT term, code, rule_key, category, style FROM mappings WHERE scope_type = 'doc' AND scope_id = ? ORDER BY id")
       .all(d.id)
-      .filter((m) => String(d.raw_text || '').includes(m.term));
+      .filter((m) => raw.includes(m.term) && !maskedNow.includes(m.term));
     const shares = db.prepare("SELECT id, token, pair_token, expires_at, revoked, created_at AS at FROM links WHERE kind = 'doc' AND doc_id = ? ORDER BY id DESC").all(d.id);
     res.json({
       doc: { id: d.id, filename: d.filename, type: d.type, size: d.size, created_at: d.created_at, match_count: d.match_count, mask_engine: d.mask_engine || '', meta_report: JSON.parse(d.meta_report_json || '[]') },

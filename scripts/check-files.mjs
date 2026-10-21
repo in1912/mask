@@ -183,6 +183,19 @@ try {
   const b10 = await req('POST', `/api/documents/${docId}/mask`, { token: tk, body: { engine: 'no-such-engine' } });
   const det10 = await req('GET', `/api/documents/${docId}`, { token: tk });
   ok('B10 未知引擎回落到跟随全局（不落非法值）', b10.status === 200 && det10.json.doc.mask_engine === '');
+  // B11：mappings 是持久底账，换引擎/改规则后旧条目仍躺在库里。详情只许回「原文里有、且当前脱敏文里已经不存在」的词。
+  {
+    const mdb = new DatabaseSync(path.join(dataDir, 'mask.sqlite'));
+    const ins = mdb.prepare("INSERT OR IGNORE INTO mappings (scope_type, scope_id, code, rule_key, category, style, term) VALUES ('doc', ?, ?, ?, ?, 'A', ?)");
+    ins.run(docId, '[人名ZZ]', 'person', 'pii', '请尽快');   // 原文有、脱敏后原样保留 → 不该出现在对照表
+    ins.run(docId, '[人名ZY]', 'person', 'pii', '万店掌系'); // 旧引擎留下的碎片，当前原文里根本没有 → 不该出现
+    mdb.close();
+    const det11 = await req('GET', `/api/documents/${docId}`, { token: tk });
+    const terms11 = (det11.json.mapping || []).map((m) => m.term);
+    ok('B11 详情对照表滤掉陈旧映射条目',
+      det11.status === 200 && !terms11.includes('请尽快') && !terms11.includes('万店掌系') && terms11.includes(PHONE) && terms11.includes(ORG),
+      JSON.stringify(terms11));
+  }
 
   console.log('C. 外部 AI 往返（桩 AI 收到的只能有码文）');
   const c1 = await req('POST', `/api/documents/${docId}/ai`, { token: tk, body: { instruction: '请总结要点。' } });
